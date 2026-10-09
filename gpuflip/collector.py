@@ -89,9 +89,11 @@ class AvitoCollector:
         if proxy:
             self.s.proxies = {"http": proxy, "https": proxy}
         self.delay, self.max_pages, self._sleep = delay, max_pages, sleep
+        self.last_status, self.last_html = 0, ""   # для диагностики (probe)
 
     def fetch(self, url: str) -> str:
         r = self.s.get(url, timeout=30)
+        self.last_status, self.last_html = r.status_code, r.text
         if is_blocked(r.status_code, r.text):
             raise BlockedError(f"HTTP {r.status_code}: Авито блокирует запросы (IP/капча)")
         r.raise_for_status()

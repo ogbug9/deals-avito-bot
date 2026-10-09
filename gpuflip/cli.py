@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 import time
 
@@ -83,23 +84,37 @@ def cmd_report(args, cfg: Config) -> int:
     return 0
 
 
+PROBE_DUMP = "probe.html"
+
+
+def _page_title(html: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    return " ".join(m.group(1).split())[:120] if m else "—"
+
+
 def cmd_probe(args, cfg: Config) -> int:
     col = AvitoCollector(cfg.proxy)
+    code = 0
     try:
-        html = col.fetch(args.url)
+        items = parse_search_html(col.fetch(args.url))
     except BlockedError as e:
         print("⛔", e)
-        return 3
+        items, code = [], 3
     except requests.RequestException as e:
         print("⛔ Сеть недоступна:", type(e).__name__, str(e)[:200])
         return 5
-    items = parse_search_html(html)
-    print(f"Страница загружена, найдено объявлений: {len(items)}")
+    print(f"HTTP {col.last_status} | {len(col.last_html)} байт | title: {_page_title(col.last_html)}")
+    if code:
+        return code
+    print(f"Найдено объявлений: {len(items)}")
     for i in items[:5]:
         print(f"  {i.id} | {i.price:.0f} | {i.title}")
     if not items:
-        print("0 объявлений: вероятно, изменилась вёрстка или нужна другая ссылка.")
-    return 0 if items else 4
+        with open(PROBE_DUMP, "w", encoding="utf-8") as f:
+            f.write(col.last_html)
+        print(f"0 объявлений: вёрстка изменилась или это заглушка. HTML сохранён в {PROBE_DUMP}")
+        return 4
+    return 0
 
 
 def cmd_deal(args, cfg: Config) -> int:
