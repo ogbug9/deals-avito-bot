@@ -8,13 +8,15 @@ import re
 import sys
 import time
 
-import requests
-
 from . import db
-from .collector import AvitoCollector, BlockedError, parse_search_html, read_csv
+from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv
 from .config import Config
 from .notifier import Notifier, fmt_rub
 from .pipeline import process
+
+
+def _collector(cfg: Config) -> AvitoCollector:
+    return AvitoCollector(cfg.proxy, cfg.delay_sec, cfg.max_pages, cfg.chrome_profile, cfg.headless, cfg.captcha_wait)
 
 
 def _notifier(cfg: Config, dry: bool) -> Notifier:
@@ -32,21 +34,21 @@ def cmd_scan(args, cfg: Config) -> int:
     if not urls:
         print("Нет поисковых ссылок: задайте SEARCH_URLS в .env или --url / --csv", file=sys.stderr)
         return 2
-    col = AvitoCollector(cfg.proxy, cfg.delay_sec, cfg.max_pages)
     rc = 0
-    for url in urls:
-        try:
-            items, complete = col.scan(url)
-        except BlockedError as e:
-            print(f"⛔ {e}. Снизьте частоту, смените IP/прокси или используйте --csv.", file=sys.stderr)
-            rc = 3
-            continue
-        except requests.RequestException as e:
-            print(f"⛔ Сеть: {type(e).__name__}", file=sys.stderr)
-            rc = 5
-            continue
-        stats = process(conn, cfg, items, source=url, complete=complete, notifier=notifier)
-        print(url, json.dumps(stats, ensure_ascii=False))
+    with _collector(cfg) as col:
+        for url in urls:
+            try:
+                items, complete = col.scan(url)
+            except BlockedError as e:
+                print(f"⛔ {e}. Снизьте частоту, смените IP/прокси или используйте --csv.", file=sys.stderr)
+                rc = 3
+                continue
+            except FetchError as e:
+                print(f"⛔ Браузер/сеть: {e}", file=sys.stderr)
+                rc = 5
+                continue
+            stats = process(conn, cfg, items, source=url, complete=complete, notifier=notifier)
+            print(url, json.dumps(stats, ensure_ascii=False))
     return rc
 
 
@@ -93,26 +95,28 @@ def _page_title(html: str) -> str:
 
 
 def cmd_probe(args, cfg: Config) -> int:
-    col = AvitoCollector(cfg.proxy)
     code = 0
-    try:
-        items = parse_search_html(col.fetch(args.url))
-    except BlockedError as e:
-        print("⛔", e)
-        items, code = [], 3
-    except requests.RequestException as e:
-        print("⛔ Сеть недоступна:", type(e).__name__, str(e)[:200])
-        return 5
+    with _collector(cfg) as col:
+        try:
+            items = parse_search_html(col.fetch(args.url))
+        except BlockedError as e:
+            print("⛔", e)
+            items, code = [], 3
+        except FetchError as e:
+            print("⛔ Браузер/сеть:", e)
+            return 5
     print(f"HTTP {col.last_status} | {len(col.last_html)} байт | title: {_page_title(col.last_html)}")
+    if not items:
+        with open(PROBE_DUMP, "w", encoding="utf-8") as f:
+            f.write(col.last_html)
+        print(f"HTML сохранён в {PROBE_DUMP}")
     if code:
         return code
     print(f"Найдено объявлений: {len(items)}")
     for i in items[:5]:
         print(f"  {i.id} | {i.price:.0f} | {i.title}")
     if not items:
-        with open(PROBE_DUMP, "w", encoding="utf-8") as f:
-            f.write(col.last_html)
-        print(f"0 объявлений: вёрстка изменилась или это заглушка. HTML сохранён в {PROBE_DUMP}")
+        print("0 объявлений: вёрстка изменилась или это заглушка.")
         return 4
     return 0
 

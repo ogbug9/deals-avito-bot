@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +17,7 @@ def _read_env_file(path: str) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
+        v = re.split(r"\s+#", v, maxsplit=1)[0]   # комментарий в конце строки: «40000   # потолок»
         out[k.strip()] = v.strip().strip('"').strip("'")
     return out
 
@@ -32,6 +34,9 @@ class Config:
     proxy: str = ""
     delay_sec: float = 6.0          # пауза между страницами (случайно x1..x2)
     max_pages: int = 5
+    chrome_profile: str = ".chrome-profile"   # постоянный профиль Chrome для сборщика
+    headless: bool = False          # без окна капчу пройти нельзя — по умолчанию окно видно
+    captcha_wait: float = 180.0     # сколько секунд ждать, пока человек пройдёт капчу
     # Экономика сделки
     negotiation_discount: float = 0.10   # на сколько реально удаётся сбить цену (консервативно)
     ask_to_sale: float = 0.92            # цена продажи ≈ медиана запросных цен * это
@@ -64,10 +69,13 @@ class Config:
         c.tg_chat_id = env.get("TG_CHAT_ID", "")
         c.db_path = env.get("DB_PATH", c.db_path)
         c.proxy = env.get("SCRAPE_PROXY", "")
+        c.chrome_profile = env.get("CHROME_PROFILE", c.chrome_profile)
+        c.headless = env.get("HEADLESS", "").lower() in ("1", "true", "yes")
         urls = env.get("SEARCH_URLS", "")
         c.search_urls = [u.strip() for u in urls.split(",") if u.strip()]
         for name, attr, cast in [
             ("DELAY_SEC", "delay_sec", float), ("MAX_PAGES", "max_pages", int),
+            ("CAPTCHA_WAIT", "captcha_wait", float),
             ("NEGOTIATION_DISCOUNT", "negotiation_discount", float),
             ("ASK_TO_SALE", "ask_to_sale", float), ("SELL_FEE_PCT", "sell_fee_pct", float),
             ("FIXED_COSTS", "fixed_costs", float),

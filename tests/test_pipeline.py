@@ -155,3 +155,13 @@ def test_score_json_saved():
     process(conn, cfg(), market() + [mk(500, 19000)], "s", True, now=1000.0)
     r = conn.execute("SELECT net_profit, score_json FROM listings WHERE id='500'").fetchone()
     assert r["net_profit"] > 0 and json.loads(r["score_json"])["ok"]
+
+
+def test_env_inline_comments(tmp_path, monkeypatch):
+    for k in ("MAX_PRICE", "SEARCH_URLS", "TG_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    env = tmp_path / ".env"
+    env.write_text("MAX_PRICE=40000        # потолок\nSEARCH_URLS=https://a.ru/x?s=104#frag\nTG_TOKEN=\n",
+                   encoding="utf-8")
+    c = Config.load(str(env))
+    assert c.max_price == 40000 and c.search_urls == ["https://a.ru/x?s=104#frag"]
