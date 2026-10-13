@@ -5,9 +5,9 @@ import json
 import statistics
 import time
 
-from . import db, modes, parts
+from . import analogs, db, modes, parts
 from .config import Config
-from .normalizer import Parsed, condition, is_urgent, parse_listing, risk_flags
+from .normalizer import Parsed, condition, is_new, is_urgent, junk_reason, parse_listing, risk_flags
 from .notifier import Notifier
 from .scoring import score_listing
 
@@ -28,7 +28,9 @@ def _normalize(conn, l, category: str) -> Parsed:
         part = None if (defect or wanted) else parts.parse_part(category, l.title, l.description)
         p = Parsed(kind=category, flags=risk_flags(text),
                    skip_reason="defective" if defect else "wanted" if wanted else "" if part else "position_not_recognized")
-    db.save_parse(conn, l.id, p, defect=defect, wanted=wanted, part=part, urgent=urgent)
+    junk = junk_reason(l.title, l.description)
+    db.save_parse(conn, l.id, p, defect=defect, wanted=wanted, part=part, urgent=urgent, junk=junk,
+                  cond="new" if is_new(l.title, l.description) else "used")
     p.item_key = part.key if part else p.key
     return p
 
@@ -61,6 +63,7 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
     found = []
     keys = set()
     hidden = db.excluded(conn)
+    caps = analogs.ceilings(conn, now, cfg.min_market_n) if cfg.analog_ceiling else {}
     for l in listings:
         _mark_reseller(conn, cfg, l.id)
         row = conn.execute("SELECT * FROM listings WHERE id=?", (l.id,)).fetchone()
@@ -72,13 +75,17 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
                 fine = db.market_stats(conn, row["fine_key"], l.id, now, column="fine_key")
                 if fine.n >= cfg.alert_market_n:
                     ms = fine
-            sc = score_listing(l.price, json.loads(row["flags"] or "{}"), ms, cfg)
+            sc = score_listing(l.price, json.loads(row["flags"] or "{}"), ms, cfg, caps.get(row["item_key"]))
             sc.precise = ms.key == row["fine_key"]
             stats["scored"] += 1
+            if (not row["junk"] and ms.n >= cfg.min_market_n and 0 < l.price < ms.median_ask * cfg.placeholder_ratio):
+                # цена в разы ниже рынка — заглушка («цену уточняйте», лот из нескольких вещей): в мусор, из рынка долой
+                conn.execute("UPDATE listings SET junk='price' WHERE id=?", (l.id,))
+                row = conn.execute("SELECT * FROM listings WHERE id=?", (l.id,)).fetchone()
             db.save_score(conn, l.id, sc.net if sc.ok else None, json.dumps(sc.to_dict(), ensure_ascii=False))
         else:
             db.save_score(conn, l.id, None, None)   # иначе в report висит старая оценка уже отсеянного объявления
-        cands = modes.evaluate(conn, cfg, row, sc, ms, now, log)
+        cands = modes.evaluate(conn, cfg, row, sc, ms, now, log, caps)
         for c in cands:
             log.hit(c.mode)
         modes.store(conn, row, cands, now)

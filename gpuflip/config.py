@@ -55,7 +55,12 @@ class Config:
     captcha_wait: float = 180.0     # сколько секунд ждать, пока человек пройдёт капчу
     # Экономика сделки
     negotiation_discount: float = 0.10   # на сколько реально удаётся сбить цену (консервативно)
-    ask_to_sale: float = 0.92            # цена продажи ≈ медиана запросных цен * это
+    ask_to_sale: float = 0.92            # быстрая продажа — не дороже медианы запросных цен * это
+    comfort_to_ask: float = 0.97         # спокойная продажа ≈ медиана * это
+    analog_ceiling: bool = True          # не оценивать продажу выше медианы более сильной модели (words/analogs.json)
+    outlier_ratio: float = 0.85          # цена ниже 10-го процентиля * это — «дешевле всех», штраф к оценке
+    outlier_penalty: float = 0.15
+    placeholder_ratio: float = 0.25      # цена ниже этой доли медианы — цена-заглушка, мусор
     sell_fee_pct: float = 0.0            # комиссия при продаже (Авито Доставка и т.п.)
     fixed_costs: float = 400.0           # тест, упаковка, доставка, ₽ на сделку
     capital_cost_per_day: float = 0.001  # стоимость замороженных денег, доля в день
@@ -120,6 +125,8 @@ class Config:
             v = env.get(f"MODE_{name.upper()}")
             if v not in (None, ""):
                 setattr(c, f"mode_{name}", v.strip().lower() in ("1", "true", "yes", "on"))
+        if env.get("ANALOG_CEILING") not in (None, ""):
+            c.analog_ceiling = env["ANALOG_CEILING"].strip().lower() in ("1", "true", "yes", "on")
         if env.get("LIGHT_CYCLE") not in (None, ""):
             c.light_cycle = env["LIGHT_CYCLE"].strip().lower() in ("1", "true", "yes", "on")
         for name, attr, cast in [

@@ -78,7 +78,11 @@
       <option value="stale">Давно не видели</option><option value="all">Все, включая ушедшие</option>
     </select>
     <h3>Состояние</h3>
-    <label class="chk"><input type="checkbox" id="f-defect" checked> Скрыть брак и поломки</label>
+    <label class="chk" title="Мусор — коробки без товара, некомплект, утиль, цены-заглушки. Он остаётся в базе, но в оценке рынка не участвует"><input type="checkbox" id="f-defect" checked> Скрыть брак, поломки и мусор</label>
+    <label class="chk" title="Показать только то, что помечено мусором — чтобы проверить правила (words\junk.txt)"><input type="checkbox" id="f-junk"> Только мусор</label>
+    <select id="f-cond" class="gap" aria-label="Новое или б/у" title="Определяется по тексту объявления">
+      <option value="">Новое и б/у</option><option value="used">Только б/у</option><option value="new">Только похожее на новое</option>
+    </select>
     <label class="chk"><input type="checkbox" id="f-wanted" checked> Скрыть «куплю»</label>
     <label class="chk"><input type="checkbox" id="f-excluded" checked> Скрыть исключённых продавцов и модели</label>
     <h3>Продавец и дата</h3>
@@ -103,6 +107,7 @@
         <option value="price_desc">Дороже</option><option value="drop">По снижению цены</option>
         <option value="rating">По рейтингу продавца</option>
         <option value="first">Недавно добавленные в базу</option><option value="gone">Недавно ушедшие</option>
+        <option value="quick">По цене быстрой продажи</option>
       </select>
       <button class="btn small" id="cols-btn" type="button" title="Колонки таблицы и профили вида">Колонки</button>
       <a class="btn small" id="export-btn" href="/api/export.csv" title="Скачать найденное в CSV (с текущими фильтрами)">CSV</a>
@@ -150,7 +155,9 @@
   <div class="small" id="m-note"></div>
   <div class="panel"><div class="tablewrap"><table class="t">
     <thead><tr><th title="Отметьте 2–4 модели для сравнения"></th><th>Позиция</th><th class="r">Объявлений</th><th>Данные</th>
-      <th class="r">Медиана</th><th class="r">Минимум</th><th class="r">Новых</th><th class="r" title="Снято с публикации за выбранный период / за всё время">Ушло</th>
+      <th class="r" title="Медиана запросных цен б/у объявлений">Медиана</th>
+      <th class="r" title="За сколько реально продать примерно за неделю. Наведите на число — объяснение">Быстрая продажа</th>
+      <th class="r" title="Если не торопиться, 2–4 недели">Спокойная</th><th class="r">Минимум</th><th class="r">Новых</th><th class="r" title="Снято с публикации за выбранный период / за всё время">Ушло</th>
       <th class="r" title="Медиана последней цены ушедших объявлений (от трёх лотов)">Цена ушедших</th><th class="r">Изменение</th>
       <th title="Медиана срока жизни ушедших объявлений">Ликвидность</th>
       <th class="r" title="Медиана, делённая на ориентировочный индекс производительности из words\analogs.json">₽ за пункт</th>

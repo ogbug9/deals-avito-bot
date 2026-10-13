@@ -176,7 +176,8 @@ def test_market_has_liquidity_and_trimmed_minimum(app):
             category="videokarty", region="moskva")
     conn.close()
     row = next(r for r in app.market(q(days=7))["rows"] if r["key"] == "RTX 3070")
-    assert row["n"] == 16 and row["min"] == 19000                              # мусорные 500 ₽ минимумом не считаются
+    assert row["n"] == 15 and row["min"] == 19000                              # мусорные 500 ₽ в рынок не идут
+    assert row["quick"] == pytest.approx(27300 * 0.92) and row["comfort"] == pytest.approx(27300 * 0.97) and row["why"]
     assert row["liq_level"] == "none" and row["index"] == 145 and row["per_index"] == pytest.approx(row["median"] / 145)
 
 

@@ -66,7 +66,10 @@ G.tabs.market = async function () {
       h("td", {class: "c"}, cb), h("td", {text: r.key}), h("td", {class: "r num", text: r.n}),
       h("td", null, h("span", {class: "chip " + (r.trust === "ok" ? "good" : r.trust === "low" ? "warn" : ""),
         text: r.trust === "ok" ? "достаточно" : r.trust === "low" ? "мало данных" : "оценки нет", title: "От 10 объявлений — алерты; 6–9 — только оценка; меньше — оценки нет"})),
-      h("td", {class: "r num", text: G.fmt(r.median)}), h("td", {class: "r num", text: G.fmt(r.min)}),
+      h("td", {class: "r num", text: G.fmt(r.median), title: r.used_only ? "Только б/у: " + r.new_n + " новых не учтено" : ""}),
+      h("td", {class: "r num", text: r.quick ? G.fmt(r.quick) : "—", title: (r.why || []).join("\n")},
+        r.ceiling_key ? h("span", {class: "small", text: " ▾", title: "Ограничено ценой более сильной " + r.ceiling_key}) : null),
+      h("td", {class: "r num small", text: r.comfort ? G.fmt(r.comfort) : "—"}), h("td", {class: "r num small", text: G.fmt(r.min)}),
       h("td", {class: "r num", text: r.new}), h("td", {class: "r num", text: r.gone + " / " + r.gone_total, title: "За период / за всё время"}),
       h("td", {class: "r num small", text: r.sold_median ? G.fmt(r.sold_median) : "—", title: r.sold_median ? "Медиана последней цены " + r.gone_total + " ушедших лотов" : "Ушедших лотов этой позиции меньше трёх"}),
       h("td", {class: "r num " + (r.change > 0 ? "up" : r.change < 0 ? "down" : ""), text: r.change == null ? "—" : (r.change > 0 ? "+" : "") + (r.change * 100).toFixed(1) + "%"}),
@@ -78,7 +81,7 @@ G.tabs.market = async function () {
     tr.onclick = () => { G.list.restore("model=" + encodeURIComponent(r.key)); G.tab("list"); };
     return tr;
   }));
-  if (!d.rows.length) $("m-rows").append(h("tr", null, h("td", {colspan: 13, class: "small", text: "Нет позиций хотя бы с тремя объявлениями."})));
+  if (!d.rows.length) $("m-rows").append(h("tr", null, h("td", {colspan: 15, class: "small", text: "Нет позиций хотя бы с тремя объявлениями."})));
   modelsBtn();
 };
 $("m-days").onchange = () => G.tabs.market(); $("m-cat").onchange = () => G.tabs.market();

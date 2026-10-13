@@ -2,8 +2,8 @@
 // Список объявлений: фильтры, пресеты, чипы, четыре вида, виртуальная прокрутка, колонки, горячие клавиши.
 (function () {
 const h = G.h;
-const TEXT = ["q", "pmin", "pmax", "region", "city", "rating", "age", "hours", "model", "mode", "conf", "ustatus", "disc", "status"];
-const CHECKS = ["delivery", "profit", "fav", "urgent", "drop"];
+const TEXT = ["q", "pmin", "pmax", "region", "city", "rating", "age", "hours", "model", "mode", "conf", "ustatus", "disc", "status", "cond"];
+const CHECKS = ["delivery", "profit", "fav", "urgent", "drop", "junk"];
 const SHOWS = ["defect", "wanted", "excluded"];            // галочка «скрыть» включена → параметра нет
 const PRESETS = [
   ["Только кандидаты", {profit: "1"}, "Лоты, прошедшие хотя бы один режим поиска"],
@@ -56,11 +56,11 @@ function chipsAndPresets() {
   const show = (k, text) => chips.push(h("span", {class: "chip"}, text,
     h("button", {type: "button", "aria-label": "Снять фильтр: " + text, title: "Снять фильтр", text: "×", onclick: () => clearParam(k)})));
   const names = {region: {msk: "Москва", regions: "Другие регионы"}, conf: {high: "доверие высокое", medium: "доверие среднее", low: "доверие низкое"},
-    ustatus: Object.assign({none: "без статуса"}, G.STATUS), status: {inactive: "ушедшие", stale: "давно не видели", all: "все, включая ушедшие"}};
+    ustatus: Object.assign({none: "без статуса"}, G.STATUS), status: {inactive: "ушедшие", stale: "давно не видели", all: "все, включая ушедшие"}, cond: {new: "похоже на новое", used: "б/у"}};
   for (const [k, v] of p) {
     if (k === "sort" || k === "dir") continue;
     if (k === "cat") { show(k, "категории: " + L.cats.size); continue; }
-    if (SHOWS.includes(k)) { show(k, {defect: "показан брак", wanted: "показаны «куплю»", excluded: "показаны исключённые"}[k]); continue; }
+    if (SHOWS.includes(k)) { show(k, {defect: "показаны брак и мусор", wanted: "показаны «куплю»", excluded: "показаны исключённые"}[k]); continue; }
     const label = L.labels[k] || k;
     if (CHECKS.includes(k)) show(k, label);
     else if (k === "mode") show(k, "режим: " + ($("f-mode").selectedOptions[0] ? $("f-mode").selectedOptions[0].textContent.replace(/ \(\d+\)$/, "") : v));
@@ -159,7 +159,8 @@ function cardEl(it, i) {
   const side = h("div", {class: "side"}, h("div", {class: "price num", text: it.price ? G.fmt(it.price) : "Цена не указана"}));
   if (it.price_drop) side.append(h("div", {class: "old num", text: G.fmt(it.first_price)}));
   if (it.unit_price) side.append(h("div", {class: "small num", text: Math.round(it.unit_price).toLocaleString("ru-RU") + (/^PSU/.test(it.item_key || "") ? " ₽/Вт" : " ₽/ГБ")}));
-  if (sc && sc.market_n >= 6) side.append(h("div", {class: "small num", text: "рынок " + G.fmt(sc.median_ask) + " (" + discText(it) + ")"}));
+  if (sc && sc.market_n >= 6) side.append(h("div", {class: "small num", text: "рынок " + G.fmt(sc.median_ask) + " (" + discText(it) + ")", title: "Медиана запросных цен позиции и отличие цены лота от неё"}),
+    h("div", {class: "small num", text: "быстро продать ≈ " + G.fmt(sc.quick_price), title: (sc.why || []).join("\n")}));
   if (it.est_profit > 0) side.append(h("div", {class: "profit num " + G.profitClass(it.est_profit), text: "≈ " + profitText(it) + " (" + G.pct(it.est_profit_pct) + ")", title: "Расчётная чистая прибыль после торга, издержек и штрафов"}));
   else if (sc && sc.reason && !sc.ok && sc.market_n) side.append(h("div", {class: "small", text: G.reason(sc.reason)}));
   side.append(h("div", {class: "chips", style: "justify-content:flex-end;margin-top:6px"},
@@ -168,7 +169,7 @@ function cardEl(it, i) {
   const note = h("input", {type: "text", placeholder: "Заметка", value: it.note || "", "aria-label": "Заметка"});
   note.onchange = () => A.save(it, {note: note.value}); note.onclick = e => e.stopPropagation();
   const u = G.safeUrl(it.url);
-  const el = h("article", {class: "card" + (it.defect || it.gone ? " bad" : ""), "data-i": i, tabindex: "-1"}, G.pic(it.image),
+  const el = h("article", {class: "card" + (it.defect || it.gone || it.junk ? " bad" : ""), "data-i": i, tabindex: "-1"}, G.pic(it.image),
     h("div", null,
       h("button", {class: "title", type: "button", text: it.title, title: "Открыть детали справа (Enter)", onclick: () => { L.setCur(i); G.panelOpen(it); }}),
       it.description ? h("div", {class: "desc", text: it.description}) : null,
@@ -236,8 +237,9 @@ const CELL = {
   gone: it => h("span", {class: "num " + (it.gone ? "" : "small"), text: it.gone ? G.when(it.gone_at) : it.stale ? "не видели " + Math.round(it.unseen_days) + " дн." : "—",
     title: it.gone ? "Снято с публикации" : ""}),
   life: it => h("span", {class: "num small", text: it.lifetime_days != null ? G.days(it.lifetime_days) : "—", title: "Сколько прожило объявление до снятия"}),
+  quick: it => h("span", {class: "num small", text: it.score && it.score.quick_price ? G.fmt(it.score.quick_price) : "—", title: it.score ? (it.score.why || []).join("\n") : ""}),
 };
-const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life"]);
+const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life", "quick"]);
 function cols() {
   const def = new Map(G.DEFAULT_COLS.map(c => [c[0], c]));
   const on = G.view.cols.filter(c => c.on).map(c => ({key: c.key, label: def.get(c.key)[1], w: def.get(c.key)[2], pin: c.pin}));
@@ -365,7 +367,7 @@ $("save-search").onclick = async () => {
 let timer;
 const soon = () => { clearTimeout(timer); timer = setTimeout(() => L.reload(), 300); };
 for (const id of ["q", "pmin", "pmax", "city"]) $("f-" + id).addEventListener("input", soon);
-for (const id of ["region", "rating", "age", "model", "mode", "conf", "ustatus", "disc", "status"].concat(CHECKS, SHOWS))
+for (const id of ["region", "rating", "age", "model", "mode", "conf", "ustatus", "disc", "status", "cond"].concat(CHECKS, SHOWS))
   $("f-" + id).addEventListener("change", () => { delete L.pending[id]; if (id === "age") $("f-hours").value = ""; L.reload(); });
 $("f-sort").onchange = () => { L.sort = $("f-sort").value || "date"; L.dir = ""; L.reload(); };
 $("f-reset").onclick = () => { L.restore(""); L.reload(); };

@@ -90,3 +90,26 @@ def similar(conn, lid: str, now: float, limit: int = 8) -> dict:
     below = sum(1 for p in all_prices if p < (r["price"] or 0))
     return {"key": r["item_key"], "items": items, "prices": all_prices, "median": median, "n": len(all_prices),
             "price": r["price"], "cheaper_than_share": 1 - below / len(all_prices) if all_prices else None}
+
+
+def ceilings(conn, now: float, min_n: int = 6, table: dict | None = None) -> dict[str, tuple[float, str]]:
+    """Для каждой модели с индексом — самая дешёвая медиана среди более сильных моделей, если она ниже своей.
+
+    {модель: (цена, какая модель)}. Смысл: слабую карту не продать быстро дороже, чем просят за сильную.
+    Индексы берутся из words/analogs.json; моделей без индекса правило не касается.
+    """
+    table = table or load()
+    index = {k: v for g in table["groups"] for k, v in g["models"].items() if v}
+    medians: dict[str, float] = {}
+    for key in index:
+        ms = db.market_stats(conn, key, None, now)
+        if ms.n >= min_n:
+            medians[key] = ms.median_ask
+    out: dict[str, tuple[float, str]] = {}
+    for key, med in medians.items():
+        stronger = [(m, k) for k, m in medians.items() if k != key and index[k] >= index[key] * 1.05]
+        if stronger:
+            cap, cap_key = min(stronger)
+            if cap < med:
+                out[key] = (cap, cap_key)
+    return out

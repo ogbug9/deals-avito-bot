@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from . import db, parts
 from .config import Config
 from .notifier import fmt_rub
-from .scoring import Score, score_listing
+from .scoring import Score, price_points, score_listing
 
 MODE_TITLES = {
     "market": "ниже рынка", "bundles": "разбор ПК", "regional": "регион → Москва", "badtext": "плохое описание",
@@ -70,10 +70,10 @@ def enabled(cfg: Config, mode: str) -> bool:
     return mode in ("market", "manual") or getattr(cfg, f"mode_{mode}", False)
 
 
-def _economics(price: float, fair: float, flags: dict, cfg: Config, days: float, extra_cost: float = 0.0) -> tuple[float, float, float]:
-    """(цель покупки после торга, чистая прибыль, доля от вложенного)."""
+def _economics(price: float, sell_price: float, flags: dict, cfg: Config, days: float, extra_cost: float = 0.0) -> tuple[float, float, float]:
+    """(цель покупки после торга, чистая прибыль, доля от вложенного). sell_price — цена быстрой продажи."""
     buy = price * (1 - cfg.negotiation_discount)
-    sell = fair * cfg.ask_to_sale * (1 - cfg.sell_fee_pct)
+    sell = sell_price * (1 - cfg.sell_fee_pct)
     capital = buy * cfg.capital_cost_per_day * days
     risk = min(0.6, sum(flags.values())) * buy * cfg.risk_loss_share
     net = sell - buy - cfg.fixed_costs - extra_cost - capital - risk
@@ -88,18 +88,19 @@ def _market_note(ms: db.MarketStats) -> str:
     return f"медиана {fmt_rub(ms.median_ask)} (n={ms.n})"
 
 
-def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None, now: float, log: ModeLog) -> list[Cand]:
+def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None, now: float, log: ModeLog,
+             ceilings: dict | None = None) -> list[Cand]:
     """row — запись listings после нормализации; sc/ms — классическая оценка и рынок позиции (если есть)."""
     out: list[Cand] = []
     flags = json.loads(row["flags"] or "{}")
     is_gpu = row["category"] in GPU_CATEGORIES
     key = row["item_key"]
 
-    if row["defect"] or row["wanted"]:
+    if row["defect"] or row["wanted"] or row["junk"]:
         mode = "market" if is_gpu else ("bundles" if row["kind"] == "pc" else "categories")
         if enabled(cfg, mode):
             log.view(mode)
-            log.reject(mode, "defective" if row["defect"] else "wanted")
+            log.reject(mode, "defective" if row["defect"] else "wanted" if row["wanted"] else "junk")
         return out
 
     # --- 1. целый ПК ---
@@ -125,7 +126,8 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
 
     source = row["model_source"] or "title"
     below_median = ms.median_ask > 0 and row["price"] < ms.median_ask
-    base = f"{ms.key or key}: {fmt_rub(row['price'])} при рынке {_market_note(ms)}"
+    base = (f"{ms.key or key}: {fmt_rub(row['price'])} при рынке {_market_note(ms)}, "
+            f"быстрая продажа ≈ {fmt_rub(sc.quick_price)} ({sc.basis})")
 
     # --- классика / 5. комплектующие / 3. плохое описание: одна формула, разные условия допуска ---
     mode = "market" if is_gpu else "categories"
@@ -172,7 +174,7 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
 
     # --- 2. региональный арбитраж ---
     if enabled(cfg, "regional") and not row["is_msk"]:
-        c = _regional(conn, cfg, row, flags, ms, now, log)
+        c = _regional(conn, cfg, row, flags, ms, now, log, (ceilings or {}).get(key))
         if c:
             out.append(c)
     return out
@@ -191,7 +193,8 @@ def _where(row) -> str:
     return "(город в выдаче не указан)"
 
 
-def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: float, log: ModeLog) -> Cand | None:
+def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: float, log: ModeLog,
+              ceiling: tuple | None = None) -> Cand | None:
     log.view("regional")
     if not row["delivery"]:
         return log.reject("regional", "no_delivery")
@@ -207,7 +210,9 @@ def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: 
         return log.reject("regional", "not_below_median")
     if row["price"] < ref.median_ask * cfg.scam_price_ratio:
         return log.reject("regional", "too_cheap_scam_risk")
-    buy, net, pct = _economics(row["price"], ref.median_ask, flags, cfg, cfg.default_days_to_sell, cfg.delivery_cost)
+    pts = price_points(ref, cfg, ceiling)
+    buy, net, pct = _economics(row["price"], pts.quick, flags, cfg, ref.days_to_sell or cfg.default_days_to_sell,
+                               cfg.delivery_cost)
     if net < cfg.min_profit_rub or pct < cfg.min_profit_pct:
         return log.reject("regional", "profit_too_small")
     if ref.n < cfg.alert_market_n:
@@ -216,7 +221,8 @@ def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: 
     local_note = f", в регионах {_market_note(local)}" if local.n >= cfg.min_market_n else ""
     return Cand("regional", net, pct,
                 f"{row['item_key']}: {fmt_rub(row['price'])} {_where(row)} с Авито Доставкой; "
-                f"московская {_market_note(ref)} ({where}){local_note}; доставка {fmt_rub(cfg.delivery_cost)}, "
+                f"московская {_market_note(ref)} ({where}){local_note}; быстрая продажа ≈ {fmt_rub(pts.quick)}; "
+                f"доставка {fmt_rub(cfg.delivery_cost)}, "
                 f"торг до {fmt_rub(buy)}{_risk_note(flags)}",
                 "high" if where == "по Москве" else "medium")
 
@@ -245,7 +251,8 @@ def _bundle(conn, cfg: Config, row, flags: dict, now: float, log: ModeLog) -> Ca
     total = sum(m for _, m, _ in priced)
     if total < row["price"] * (1 + cfg.bundle_min_markup):
         return log.reject("bundles", "parts_not_25pct_above_price")
-    buy, net, pct = _economics(row["price"], total, flags, cfg, cfg.bundle_days, PART_SELL_COST * len(priced))
+    buy, net, pct = _economics(row["price"], total * cfg.ask_to_sale, flags, cfg, cfg.bundle_days,
+                               PART_SELL_COST * len(priced))
     if net < cfg.min_profit_rub or pct < cfg.min_profit_pct:
         return log.reject("bundles", "profit_too_small")
     if min(n for _, _, n in priced) < cfg.alert_market_n:

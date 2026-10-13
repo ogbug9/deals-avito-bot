@@ -77,7 +77,10 @@ function render(d) {
   if (sc && sc.market_n) {
     add("Рынок позиции", G.fmt(sc.median_ask) + " (n=" + sc.market_n + ")" + (sc.precise ? " — точная позиция" : ""));
     if (sc.discount_vs_market != null && sc.market_n >= 6) add("Цена к рынку", (sc.discount_vs_market > 0 ? "ниже на " : "выше на ") + G.pct(Math.abs(sc.discount_vs_market)));
-    if (sc.sell_price) add("Оценка продажи", G.fmt(sc.sell_price));
+    if (sc.quick_price) add("Быстрая продажа (≈ неделя)", G.fmt(sc.quick_price) + " — " + sc.basis);
+    if (sc.comfort_price) add("Спокойная продажа (2–4 недели)", G.fmt(sc.comfort_price) + (sc.comfort_net ? ", чистыми " + G.fmt(sc.comfort_net) : ""));
+    if (sc.sold_n) add("Ушедшие лоты позиции", sc.sold_n + " шт." + (sc.sold_median ? ", медиана цены " + G.fmt(sc.sold_median) : ""));
+    if (sc.ceiling_key) add("Сильнее и дешевле", sc.ceiling_key + " — " + G.fmt(sc.ceiling));
     if (sc.target_buy) add("Покупка после торга", G.fmt(sc.target_buy));
     if (sc.risk_loss) add("Штраф за риск", "−" + G.fmt(sc.risk_loss));
     if (sc.net != null && sc.target_buy) add("Чистыми после торга", G.fmt(sc.net) + " (" + G.pct(sc.net_pct) + ")");
@@ -96,7 +99,8 @@ function render(d) {
   if (d.price_history && d.price_history.length > 1) add("Изменений цены", String(d.price_history.length - 1));
   const risks = Object.entries(d.flags).map(([k, v]) => (G.FLAGS[k] || k) + " — " + Math.round(v * 100) + "%");
   if (risks.length) add("Признаки риска", risks.join("; "));
-  add("Состояние", d.avito_condition || "не проверено (карточка не читалась)");
+  add("Состояние", d.avito_condition || (d.cond === "new" ? "по тексту похоже на новое" : "по тексту б/у") + " (карточка не читалась)");
+  if (d.junk) add("Мусор", d.junk_title);
   if (d.avito_model) add("Модель по Авито", d.avito_model);
   if (d.model_source && d.model_source !== "title") add("Модель определена", d.model_source === "fuzzy" ? "с исправлением опечатки" : "по описанию");
   add("Продавец", [d.seller_name, d.seller_type, d.rating != null ? "★ " + String(d.rating).replace(".", ",") + (d.reviews ? " (" + d.reviews + ")" : "") : null,
@@ -135,6 +139,8 @@ function render(d) {
     h("h3", {text: "Описание"}), h("div", {style: "white-space:pre-line;overflow-wrap:anywhere", text: d.description || "—"}),
     h("h3", {text: "Цена и медиана"}), chart(d),
     h("h3", {text: "Расчёт"}), h("table", {class: "kv"}, h("tbody", null, rows)),
+    sc && sc.why && sc.why.length ? h("div", null, h("h3", {text: "Как посчитана цена продажи"}),
+      h("ul", {class: "reasons"}, sc.why.map(t => h("li", {text: t})))) : null,
     sim && sim.key ? h("div", null, h("h3", {text: "Похожие лоты — " + sim.key}), spread(sim),
       sim.cheaper_than_share != null ? h("div", {class: "small", text: "Этот лот дешевле " + G.pct(sim.cheaper_than_share) + " объявлений позиции."}) : null,
       sim.items.map(x => h("div", {class: "simrow"},

@@ -62,7 +62,8 @@ def reload_words() -> None:
 
 def _words(kind: str):
     if kind not in _LISTS:
-        _LISTS[kind] = {"stop": wordlists.stop_words, "risk": wordlists.risk_flags, "urgent": wordlists.urgent_words}[kind]()
+        _LISTS[kind] = {"stop": wordlists.stop_words, "risk": wordlists.risk_flags, "urgent": wordlists.urgent_words,
+                        "junk": wordlists.junk_rules}[kind]()
     return _LISTS[kind]
 
 
@@ -189,6 +190,31 @@ def condition(title: str, description: str = "") -> tuple[bool, bool]:
     t = (title or "").lower().replace("ё", "е")
     chk = _clean_for_flags(f"{t} {(description or '').lower().replace('ё', 'е')}")
     return any(w in chk for w in _words("stop")), bool(_WANTED_RE.search(t))
+
+
+JUNK_RU = {"box": "коробка без товара", "incomplete": "некомплект: нет деталей", "scrap": "утиль / на запчасти",
+           "price": "цена-заглушка"}
+
+
+def junk_reason(title: str, description: str = "") -> str:
+    """Причина, по которой объявление — мусор (коробка, некомплект, утиль), или ''. Правила — в words/junk.txt."""
+    t = (title or "").lower().replace("ё", "е")
+    full = f"{t} {(description or '').lower().replace('ё', 'е')}"
+    for reason, where, rx in _words("junk"):
+        if rx.search(t if where == "title" else full):
+            return reason
+    return ""
+
+
+_NOT_NEW_RE = re.compile(r"(?:как|почти|практически|будто|словно|состояни\w*|выглядит)\s+(?:как\s+)?нов\w+")
+_NEW_RE = re.compile(r"\bнов(?:ая|ый|ое|ые|ую|ой)\b|запечатан|нераспакован|не\s+распакован|в\s+(?:заводской\s+)?упаковке|"
+                     r"в\s+пл[её]нк|\bnew\b|sealed|гарантия\s+магазина|официальная\s+гарантия")
+
+
+def is_new(title: str, description: str = "") -> bool:
+    """Похоже ли, что продают новую вещь. «Как новая» и «состояние новой» — это б/у."""
+    text = _NOT_NEW_RE.sub(" ", f"{title} {description}".lower().replace("ё", "е"))
+    return bool(_NEW_RE.search(text))
 
 
 def risk_flags(text: str) -> dict[str, float]:

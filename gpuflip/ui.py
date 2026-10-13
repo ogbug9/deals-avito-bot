@@ -17,9 +17,11 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, analogs, compare, db, modes, sources
 from .config import Config, set_env
+from .normalizer import JUNK_RU
 from .notifier import Notifier
 from .paths import home, package_dir
 from .query import FILTER_LABELS, STALE_DAYS, USER_STATUSES, _int, build_query, order_by
+from .scoring import price_points
 
 WEB_DIR = package_dir() / "web"
 STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
@@ -29,7 +31,7 @@ FIELDS = ("id, url, title, description, city, price, first_price, category, regi
           "posted_at, first_seen, last_seen, rating, reviews, defect, wanted, gpu_key, item_key, fine_key, unit_price, qty, "
           "flags, net_profit, score_json, status, mode_tags, est_profit, est_profit_pct, reason, confidence, model_source, "
           "urgent, is_msk, avito_condition, fav, user_status, note, seller_id, seller_name, seller_type, seller_ads, "
-          "reseller, photos, deep_at, avito_model, checklist, brand, gone_at, checked_at")
+          "reseller, photos, deep_at, avito_model, checklist, brand, gone_at, checked_at, junk, cond")
 # чек-лист проверки на месте: ключ → подпись (отметки хранятся в записи лота)
 CHECKLIST = [
     ("stress", "Нагрузка FurMark / OCCT 10–15 минут без вылетов"),
@@ -54,8 +56,12 @@ def _row(r, now: float | None = None) -> dict:
     sc = json.loads(r["score_json"]) if r["score_json"] else None
     d["score"] = sc and {k: sc.get(k) for k in ("ok", "reason", "median_ask", "market_n", "net", "net_pct", "target_buy",
                                                  "sell_price", "risk_loss", "discount_vs_market", "low_data", "ask_net",
-                                                 "position", "precise", "days_to_sell", "days_real", "days_n")}
+                                                 "position", "precise", "days_to_sell", "days_real", "days_n",
+                                                 "quick_price", "comfort_price", "comfort_net", "p25", "p10", "sold_median",
+                                                 "sold_n", "ceiling", "ceiling_key", "used_only", "new_n", "basis", "why",
+                                                 "profit")}
     d["category_title"] = sources.CATEGORIES.get(r["category"], (r["category"] or "—",))[0]
+    d["junk_title"] = JUNK_RU.get(r["junk"], r["junk"]) if r["junk"] else ""
     d["modes"] = [{"key": m, "title": modes.MODE_TITLES.get(m, m)} for m in (r["mode_tags"] or "").split(",") if m]
     d["photos"] = json.loads(r["photos"]) if r["photos"] else ([r["image"]] if r["image"] else [])
     d["checklist"] = json.loads(r["checklist"]) if r["checklist"] else {}
@@ -208,15 +214,16 @@ class App:
                     if m in mode_n:
                         mode_n[m] += 1
             total, clean, last, msk, fav = c.execute(
-                f"SELECT COUNT(*), SUM(defect=0 AND wanted=0), MAX(last_seen), SUM(is_msk), SUM(fav) {base}").fetchone()
+                f"SELECT COUNT(*), SUM(defect=0 AND wanted=0 AND junk IS NULL), MAX(last_seen), SUM(is_msk), SUM(fav) {base}").fetchone()
             now = time.time()
             gone_n, since = c.execute("SELECT SUM(status='inactive'), MIN(first_seen) FROM listings").fetchone()
+            junk_n = c.execute(f"SELECT COUNT(*) {base} AND junk IS NOT NULL").fetchone()[0]
             stale_n = c.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND last_seen<?",
                                 (now - STALE_DAYS * 86400,)).fetchone()[0]
             ust = {r[0]: r[1] for r in c.execute(f"SELECT user_status, COUNT(*) {base} AND user_status IS NOT NULL GROUP BY 1")}
             return {
                 "total": total, "clean": clean or 0, "last_seen": last, "fav": fav or 0,
-                "gone": gone_n or 0, "stale": stale_n, "since": since,
+                "gone": gone_n or 0, "stale": stale_n, "since": since, "junk": junk_n,
                 "categories": [{"key": k, "title": t, "n": cats.get(k, 0)} for k, (t, _) in sources.CATEGORIES.items()
                                if cats.get(k)],
                 "regions": [{"key": "msk", "title": "Москва", "n": msk or 0},
@@ -376,7 +383,7 @@ class App:
             new_n: dict[str, int] = {}
             for key, price, first_seen in c.execute(
                     "SELECT item_key, price, first_seen FROM listings WHERE status='active' AND item_key IS NOT NULL "
-                    f"AND price>0 AND defect=0 AND wanted=0{cat_sql}", cat_args):
+                    f"AND price>0 AND defect=0 AND wanted=0 AND junk IS NULL{cat_sql}", cat_args):
                 groups.setdefault(key, []).append(price)
                 if first_seen >= now - days * 86400:
                     new_n[key] = new_n.get(key, 0) + 1
@@ -390,12 +397,16 @@ class App:
                                "WHERE status='inactive' AND gone_at IS NOT NULL AND item_key IS NOT NULL AND defect=0 AND wanted=0"):
                 gone_rows.setdefault(r["item_key"], []).append(r)
             table = analogs.load()
+            cfg = Config.load(self.env_path)
+            caps = analogs.ceilings(c, now, cfg.min_market_n, table) if cfg.analog_ceiling else {}
             rows = []
             for key, prices in groups.items():
                 if len(prices) < 3:
                     continue
                 h = hist.get(key, [])
-                med = statistics.median(prices)
+                ms = db.market_stats(c, key, None, now)
+                pts = price_points(ms, cfg, caps.get(key)) if ms.n >= cfg.min_market_n else None
+                med = ms.median_ask if ms.n else statistics.median(prices)
                 change = (med - h[0]["median"]) / h[0]["median"] if len(h) >= 2 and h[0]["median"] else None
                 recent = [r for r in gone_rows.get(key, []) if r["gone_at"] >= now - 60 * 86400]
                 lived = db.lifetimes(recent)
@@ -411,6 +422,9 @@ class App:
                              "liq_days": days_sell, "liq_level": level, "liq_n": len(lived),
                              "liq_rough": days_sell is not None and len(lived) < db.LIQUIDITY_SOLID,
                              "index": idx, "per_index": med / idx if idx else None,
+                             "quick": pts.quick if pts else None, "comfort": pts.comfort if pts else None,
+                             "basis": pts.basis if pts else "", "why": pts.why if pts else [],
+                             "ceiling_key": pts.ceiling_key if pts else "", "used_only": ms.used_only, "new_n": ms.new_n,
                              "gone_total": len(gone_rows.get(key, [])),
                              "sold_median": statistics.median(sold) if len(sold) >= 3 else None})
             rows.sort(key=lambda r: (-r["n"], r["key"]))
@@ -560,7 +574,8 @@ class App:
             c.close()
         buf = io.StringIO()
         w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-        w.writerow(["id", "Название", "Цена", "Категория", "Позиция", "Медиана", "n", "Скидка к рынку, %", "Расчётная прибыль",
+        w.writerow(["id", "Название", "Цена", "Категория", "Позиция", "Медиана", "n", "Скидка к рынку, %", "Быстрая продажа",
+                    "Спокойная продажа", "Мусор", "Расчётная прибыль",
                     "Режимы", "Доверие", "Причина", "Город", "Доставка", "Состояние", "Дата", "Дней в базе", "Снижение цены",
                     "Продавец", "Рейтинг", "Мой статус", "Заметка", "Объявление", "Впервые увидели", "Последний раз видели",
                     "Опубликовано (оценка)", "Ушло", "Прожило дней", "Ссылка"])
@@ -572,6 +587,8 @@ class App:
             w.writerow([d["id"], d["title"], f"{d['price']:.0f}" if d["price"] else "", d["category_title"], d["item_key"] or "",
                         f"{sc['median_ask']:.0f}" if sc.get("market_n") else "", sc.get("market_n") or "",
                         f"{sc['discount_vs_market'] * 100:.0f}" if sc.get("discount_vs_market") is not None and sc.get("market_n") else "",
+                        f"{sc['quick_price']:.0f}" if sc.get("quick_price") else "",
+                        f"{sc['comfort_price']:.0f}" if sc.get("comfort_price") else "", d["junk_title"],
                         f"{d['est_profit']:.0f}" if d["est_profit"] else "", ", ".join(m["title"] for m in d["modes"]),
                         modes.CONFIDENCE_RU.get(d["confidence"] or "", ""), d["reason"] or "", d["city"] or "",
                         "да" if d["delivery"] else "нет", d["avito_condition"] or "", d["date_text"] or "",

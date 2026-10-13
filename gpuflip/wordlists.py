@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .paths import home, package_dir
 
-NAMES = ("stop", "risk", "urgent")
+NAMES = ("stop", "risk", "urgent", "junk")
 
 
 def path(name: str) -> Path:
@@ -33,6 +33,21 @@ def stop_words() -> list[str]:
 
 def urgent_words() -> list[str]:
     return _lines("urgent")
+
+
+def junk_rules() -> list[tuple[str, str, re.Pattern]]:
+    """[(причина, где искать: title | any, шаблон)] из junk.txt."""
+    out = []
+    for line in _lines("junk"):
+        try:
+            head, pattern = line.split(":", 1)
+            reason, where = (x.strip() for x in head.split("=", 1))
+            if where not in ("title", "any"):
+                continue
+            out.append((reason, where, re.compile(pattern.strip())))
+        except (ValueError, re.error):
+            continue
+    return out
 
 
 def risk_flags() -> list[tuple[str, re.Pattern, float]]:

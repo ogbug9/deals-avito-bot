@@ -7,24 +7,28 @@ from . import modes, sources
 
 USER_STATUSES = ("new", "checked", "bought", "skipped")
 STALE_DAYS = 3.0
+_SC = "json_extract(score_json, '$.{}')"
+_NO_MARKET = f"({_SC.format('market_n')} IS NULL OR {_SC.format('market_n')} < 6)"   # рынок не оценён
+# ключ → (выражение, по убыванию?, условие «значения нет» — такие строки всегда в конце, дополнительный порядок)
 SORTS = {
-    "date": "COALESCE(posted_at, first_seen) DESC",
-    "profit": "est_profit IS NULL, est_profit DESC",
-    "pct": "json_extract(score_json, '$.discount_vs_market') IS NULL, json_extract(score_json, '$.discount_vs_market') DESC",
-    "price_asc": "price ASC",
-    "price_desc": "price DESC",
-    "rating": "rating IS NULL, rating DESC, reviews DESC",
-    "drop": "(first_price - price) DESC",
-    "age": "COALESCE(posted_at, first_seen) ASC",
-    "title": "lc(title) ASC",
-    "n": "json_extract(score_json, '$.market_n') IS NULL, json_extract(score_json, '$.market_n') DESC",
-    "median": "json_extract(score_json, '$.median_ask') IS NULL, json_extract(score_json, '$.median_ask') DESC",
-    "city": "city IS NULL OR city='', lc(city) ASC",
-    "model": "item_key IS NULL, item_key ASC",
-    "first": "first_seen DESC",
-    "seen": "last_seen DESC",
-    "gone": "gone_at IS NULL, gone_at DESC",
-    "life": "gone_at IS NULL, (gone_at - COALESCE(posted_at, first_seen)) ASC",
+    "date": ("COALESCE(posted_at, first_seen)", True, "", ""),
+    "profit": ("est_profit", True, "est_profit IS NULL", ""),
+    "pct": (_SC.format("discount_vs_market"), True, _NO_MARKET, ""),
+    "price_asc": ("price", False, "", ""),
+    "price_desc": ("price", True, "", ""),
+    "rating": ("rating", True, "rating IS NULL", "reviews DESC"),
+    "drop": ("(COALESCE(first_price, 0) - COALESCE(price, 0))", True, "", ""),
+    "age": ("COALESCE(posted_at, first_seen)", False, "", ""),
+    "title": ("lc(title)", False, "", ""),
+    "n": (_SC.format("market_n"), True, f"{_SC.format('market_n')} IS NULL", ""),
+    "median": (_SC.format("median_ask"), True, _NO_MARKET, ""),
+    "city": ("lc(city)", False, "city IS NULL OR city=''", ""),
+    "model": ("item_key", False, "item_key IS NULL", ""),
+    "first": ("first_seen", True, "", ""),
+    "seen": ("last_seen", True, "", ""),
+    "gone": ("gone_at", True, "gone_at IS NULL OR status<>'inactive'", ""),
+    "life": ("(gone_at - COALESCE(posted_at, first_seen))", False, "gone_at IS NULL OR status<>'inactive'", ""),
+    "quick": (_SC.format("quick_price"), True, f"{_NO_MARKET} OR COALESCE({_SC.format('quick_price')}, 0)=0", ""),
 }
 # подписи фильтров — для чипов и подсказки «какой фильтр обнулил выдачу»
 FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория", "pmin": "цена от", "pmax": "цена до", "region": "регион",
@@ -33,7 +37,8 @@ FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория
                  "profit": "только кандидаты", "mode": "режим поиска", "fav": "только избранное",
                  "ustatus": "мой статус", "conf": "доверие", "disc": "скидка к рынку от, %", "urgent": "срочные",
                  "drop": "цена снижена", "ids": "выбранные лоты",
-                 "status": "какие объявления"}
+                 "status": "какие объявления",
+                 "cond": "состояние", "junk": "только мусор"}
 
 
 def _one(q: dict, k: str) -> str:
@@ -48,14 +53,15 @@ def _int(q: dict, name: str, default: int = 0) -> int:
 
 
 def order_by(q: dict) -> str:
-    """ORDER BY из параметров sort и dir (dir=flip разворачивает направление)."""
-    sql = SORTS.get(_one(q, "sort") or "date", SORTS["date"])
+    """ORDER BY из параметров sort и dir. dir=flip разворачивает направление; строки без значения — всегда в конце."""
+    expr, desc, missing, extra = SORTS.get(_one(q, "sort") or "date", SORTS["date"])
     if _one(q, "dir") == "flip":
-        head, _, tail = sql.rpartition(",")
-        last = tail.strip()
-        last = last[:-4] + "ASC" if last.endswith("DESC") else last[:-3] + "DESC" if last.endswith("ASC") else last
-        sql = f"{head}, {last}" if head else last
-    return sql
+        desc = not desc
+    parts = [f"({missing})"] if missing else []
+    parts.append(f"{expr} {'DESC' if desc else 'ASC'}")
+    if extra:
+        parts.append(extra)
+    return ", ".join(parts)
 
 
 def build_query(q: dict, conn=None) -> tuple[str, list]:
@@ -88,8 +94,13 @@ def build_query(q: dict, conn=None) -> tuple[str, list]:
         args.append(_int(q, "pmax"))
     if _one(q, "delivery") == "1":
         where.append("delivery=1")
-    if _one(q, "defect") != "show":            # по умолчанию брак скрыт
-        where.append("defect=0")
+    if _one(q, "defect") != "show":            # по умолчанию брак и мусор скрыты
+        where.append("defect=0 AND junk IS NULL")
+    if _one(q, "junk") == "1":                 # только мусор — чтобы проверить, что помечено верно
+        where.append("junk IS NOT NULL")
+    if _one(q, "cond") in ("new", "used"):
+        where.append("cond=?")
+        args.append(_one(q, "cond"))
     if _one(q, "wanted") != "show":
         where.append("wanted=0")
     if _one(q, "model"):

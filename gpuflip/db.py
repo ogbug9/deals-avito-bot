@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS excluded(kind TEXT NOT NULL, value TEXT NOT NULL, tit
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS compare_sets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ids TEXT, ref TEXT, created REAL);
 """
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 # Колонки, добавленные после первой версии: дописываются в существующую базу при подключении.
@@ -93,6 +93,9 @@ EXTRA_COLUMNS = {
     "deep_at": "REAL",                        # когда карточку читали целиком (кэш)
     "avito_model": "TEXT",                    # «Бренд / Модель» из характеристик карточки
     "checklist": "TEXT",                      # json: отмеченные пункты проверки на месте
+    # --- версия 5 ---
+    "junk": "TEXT",                           # мусор: box | incomplete | scrap | price (см. normalizer.JUNK_RU)
+    "cond": "TEXT",                           # оценка по тексту: new | used
 }
 # колонки, добавленные в другие таблицы
 EXTRA_OTHER = {
@@ -232,8 +235,10 @@ def mark_gone(conn, source: str, scan_start: float) -> int:
     return cur.rowcount
 
 
-def save_parse(conn, listing_id: str, p, defect: bool = False, wanted: bool = False, part=None, urgent: bool = False) -> None:
+def save_parse(conn, listing_id: str, p, defect: bool = False, wanted: bool = False, part=None, urgent: bool = False,
+               junk: str = "", cond: str = "used") -> None:
     """p — normalizer.Parsed; part — parts.Part для не-видеокарт (позиция, количество, бренд)."""
+    conn.execute("UPDATE listings SET junk=?, cond=? WHERE id=?", (junk or None, cond, listing_id))
     item_key = (part.key if part else p.key) or None
     qty = part.qty if part and part.qty else None
     fine = (getattr(part, "fine_key", "") if part else "") or None
@@ -257,10 +262,16 @@ class MarketStats:
     n: int = 0
     median_ask: float = 0.0
     p25_ask: float = 0.0
+    p10_ask: float = 0.0
+    used_only: bool = False               # рынок посчитан только по б/у (новые отброшены)
+    new_n: int = 0                        # сколько объявлений похожи на новые
     sold_n: int = 0
     median_sold_price: float | None = None
     days_to_sell: float | None = None     # медиана «жизни» ушедших объявлений, дни
     lived_n: int = 0                      # по скольким ушедшим она посчитана
+
+
+MIN_USED = 6      # столько б/у объявлений нужно, чтобы считать рынок только по ним
 
 
 def _trim(prices: list[float]) -> list[float]:
@@ -280,18 +291,23 @@ def market_stats(conn, key: str, exclude_id: str | None, now: float,
     st = MarketStats(key=key)
     group = "" if msk is None else f" AND is_msk={int(msk)}"
     rows = conn.execute(
-        f"SELECT price FROM listings WHERE {column}=? AND status='active' AND id<>? AND last_seen>=? "
-        "AND price>0 AND defect=0 AND wanted=0 AND (flags IS NULL OR flags NOT LIKE '%prepay%')" + group,
+        f"SELECT price, cond FROM listings WHERE {column}=? AND status='active' AND id<>? AND last_seen>=? "
+        "AND price>0 AND defect=0 AND wanted=0 AND junk IS NULL AND (flags IS NULL OR flags NOT LIKE '%prepay%')" + group,
         (key, exclude_id or "", now - active_window_days * 86400),
     ).fetchall()
-    prices = _trim(sorted(r["price"] for r in rows))
+    # Перепродаём мы всегда б/у вещь, поэтому сравниваем с б/у: новые (с гарантией магазина) стоят дороже.
+    used = [r["price"] for r in rows if r["cond"] != "new"]
+    st.new_n = len(rows) - len(used)
+    st.used_only = st.new_n > 0 and len(used) >= MIN_USED
+    prices = _trim(sorted(used if st.used_only else [r["price"] for r in rows]))
     st.n = len(prices)
     if prices:
         st.median_ask = statistics.median(prices)
         st.p25_ask = statistics.quantiles(prices, n=4)[0] if len(prices) >= 4 else prices[0]
+        st.p10_ask = statistics.quantiles(prices, n=10)[0] if len(prices) >= 10 else prices[0]
     gone = conn.execute(
         "SELECT price, first_seen, posted_at, gone_at, baseline FROM listings "
-        f"WHERE {column}=? AND status='inactive' AND gone_at>=? AND defect=0 AND wanted=0",
+        f"WHERE {column}=? AND status='inactive' AND gone_at>=? AND defect=0 AND wanted=0 AND junk IS NULL",
         (key, now - sold_window_days * 86400),
     ).fetchall()
     st.sold_n = len(gone)

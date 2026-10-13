@@ -95,10 +95,10 @@ def test_csv_export(conn):
 def test_models_comparison_uses_market_and_analog_index(conn):
     process(conn, Config(), [L(600 + i, 29000 + (i % 3) * 300, "Видеокарта RTX 3060 12GB") for i in range(12)],
             "msk", False, now=NOW, category="videokarty", region="moskva")
-    res = compare.models(conn, ["RTX 3070", "RTX 3060 12GB", "RTX 5070"], now=NOW + 120)
-    assert [m["key"] for m in res["models"]] == ["RTX 3070", "RTX 3060 12GB", "RTX 5070"] and res["approx"] is True
+    res = compare.models(conn, ["RTX 3070", "RTX 3060 12GB", "GTX 750"], now=NOW + 120)
+    assert [m["key"] for m in res["models"]] == ["RTX 3070", "RTX 3060 12GB", "GTX 750"] and res["approx"] is True
     idx = row(res, "index")["cells"]
-    assert [c["text"] for c in idx] == ["145", "100", "нет данных"]             # для 50-й серии индекса нет — не выдумываем
+    assert [c["text"] for c in idx] == ["145", "100", "нет данных"]             # модели нет в таблице — индекс не выдумываем
     per = row(res, "per_index")["cells"]
     assert per[0]["mark"] == "best" and per[1]["mark"] == "worst" and per[2]["text"] == "—"
     assert row(res, "median")["cells"][0]["mark"] == "best"
@@ -110,8 +110,8 @@ def test_models_comparison_uses_market_and_analog_index(conn):
 def test_analog_table_is_marked_approximate_and_has_no_invented_gaps():
     t = analogs.load()
     assert t["approx"] is True and t["error"] == "" and len(t["groups"]) >= 6
-    assert all("приблизительно" in g["note"] or "не заданы" in g["note"] for g in t["groups"])
-    assert analogs.index_of("RTX 3060 12GB") == 100 and analogs.index_of("RTX 5090") is None
+    assert all("приблизительно" in g["note"] for g in t["groups"])
+    assert analogs.index_of("RTX 3060 12GB") == 100 and analogs.index_of("RTX 5090") == 480
     assert analogs.index_of("Несуществующая") is None and analogs.group_of("RTX 3070")["name"] == "1440p"
 
 
