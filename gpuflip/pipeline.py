@@ -39,6 +39,7 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
     for l in listings:
         row = conn.execute("SELECT gpu_key, flags FROM listings WHERE id=?", (l.id,)).fetchone()
         if not row["gpu_key"]:
+            db.save_score(conn, l.id, None, None)   # иначе в report висит старая оценка уже отсеянного объявления
             continue
         flags = json.loads(row["flags"] or "{}")
         ms = db.market_stats(conn, row["gpu_key"], l.id, now)

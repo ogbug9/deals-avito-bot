@@ -44,6 +44,19 @@ def _digits(s: str) -> float:
     return float(d) if d else 0.0
 
 
+def _description(it) -> str:
+    """Текст объявления в карточке. В вёрстке 2026 у него нет своего маркера: это <p> перед датой."""
+    de = it.select_one('[class*="description"]')
+    if de:
+        return de.get_text(" ", strip=True)
+    date = it.select_one('[data-marker="item-date/wrapper"]') or it.select_one('[data-marker="item-date"]')
+    p = date.find_previous("p") if date else None
+    if (p is None or it not in p.parents or p.get("data-marker")
+            or p.find_parent(attrs={"data-marker": ("item-location", "item-price")})):
+        return ""
+    return p.get_text(" ", strip=True)
+
+
 def parse_search_html(html: str) -> list[RawListing]:
     soup = BeautifulSoup(html, "html.parser")
     out: list[RawListing] = []
@@ -52,7 +65,7 @@ def parse_search_html(html: str) -> list[RawListing]:
         a = it.select_one('[data-marker="item-title"]') or it.select_one('a[itemprop="url"]')
         if not iid or not a:
             continue
-        href = a.get("href", "")
+        href = a.get("href", "").split("?")[0]   # ?context=… — мусор сессии, для ссылки не нужен
         url = href if href.startswith("http") else BASE + href
         title_el = it.select_one('[itemprop="name"]') or a
         title = title_el.get_text(" ", strip=True)
@@ -61,18 +74,18 @@ def parse_search_html(html: str) -> list[RawListing]:
         if not price:
             pe = it.select_one('[data-marker="item-price"]')
             price = _digits(pe.get_text()) if pe else 0.0
-        de = it.select_one('[class*="description"]')
-        ce = it.select_one('[data-marker="item-address"]') or it.select_one('[class*="geo-root"]')
+        ce = (it.select_one('[data-marker="item-location"]') or it.select_one('[data-marker="item-address"]')
+              or it.select_one('[class*="geo-root"]'))
         out.append(RawListing(
             id=str(iid), title=title, price=price, url=url,
-            description=de.get_text(" ", strip=True) if de else "",
+            description=_description(it),
             city=ce.get_text(" ", strip=True) if ce else "",
         ))
     return out
 
 
 def is_blocked(status: int, html: str) -> bool:
-    if status in (403, 429, 407):
+    if 400 <= status < 500 and status not in (404, 410):   # 403/429, а также нестандартные вроде 439
         return True
     low = html[:5000].lower()
     return any(w in low for w in ("проблема с ip", "доступ ограничен", "captcha", "firewall"))
@@ -153,15 +166,19 @@ class AvitoCollector:
         if self._snapshot():
             return self.last_html
         if is_blocked(self.last_status, self.last_html):
-            if not self.headless and self.captcha_wait > 0:
-                print(f"⏸ Авито просит капчу. Пройдите её в открытом окне Chrome (жду до {self.captcha_wait:.0f} с)…",
-                      flush=True)
-                deadline = time.time() + self.captcha_wait
-                while time.time() < deadline:
-                    self._page.wait_for_timeout(2000)
-                    if self._snapshot():
-                        self.last_status = 200
-                        return self.last_html
+            # Сначала даём 30 с автоматической «проверке безопасности» (браузер проходит её сам),
+            # потом, если окно видно, ждём человека с капчей.
+            wait = 30.0 + (self.captcha_wait if not self.headless else 0.0)
+            start, asked = time.time(), False
+            while time.time() - start < wait:
+                self._page.wait_for_timeout(2000)
+                if self._snapshot():
+                    self.last_status = 200
+                    return self.last_html
+                if not asked and time.time() - start >= 30 and not self.headless:
+                    asked = True
+                    print(f"⏸ Авито просит капчу. Пройдите её в открытом окне Chrome (жду до {self.captcha_wait:.0f} с)…",
+                          flush=True)
             raise BlockedError(f"HTTP {self.last_status}: Авито блокирует запросы (IP/капча)")
         return self.last_html
 

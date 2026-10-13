@@ -32,7 +32,7 @@ class Config:
     # Поиск
     search_urls: list[str] = field(default_factory=list)
     proxy: str = ""
-    delay_sec: float = 6.0          # пауза между страницами (случайно x1..x2)
+    delay_sec: float = 15.0         # пауза между страницами (случайно x1..x2); быстрее — Авито даёт 429
     max_pages: int = 5
     chrome_profile: str = ".chrome-profile"   # постоянный профиль Chrome для сборщика
     headless: bool = False          # без окна капчу пройти нельзя — по умолчанию окно видно

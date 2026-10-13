@@ -80,7 +80,7 @@ def save_parse(conn, listing_id: str, p) -> None:
     )
 
 
-def save_score(conn, listing_id: str, net: float | None, score_json: str) -> None:
+def save_score(conn, listing_id: str, net: float | None, score_json: str | None) -> None:
     conn.execute("UPDATE listings SET net_profit=?, score_json=? WHERE id=?", (net, score_json, listing_id))
 
 

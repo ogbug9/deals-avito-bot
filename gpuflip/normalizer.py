@@ -54,6 +54,7 @@ HARD_REJECT = [
     "на запчасти", "не работает", "нерабоч", "неисправ", "артефакт", "битая", "сгорел", "глючит",
     "не включается", "не запускается", "нет изображения", "мертв", "мёртв", "под восстановление",
     "на ремонт", "требует ремонта", "нужен ремонт", "полосит", "не определяется",
+    "нет картинки", "не крутится", "не крутятся", "не вращается", "отвал", "выключается монитор",
 ]
 # (имя флага, regex, вероятность «плохой сделки»)
 SOFT_FLAGS = [
@@ -63,7 +64,29 @@ SOFT_FLAGS = [
     ("repaired", re.compile(r"перепайк|реболл|reball|прогрев|после ремонта|ремонтир"), 0.20),
     ("flashed", re.compile(r"прошит|перепрош|bios мод|модифицирован"), 0.10),
     ("no_testing_allowed", re.compile(r"тест\w* не даю|без тест|без проверки"), 0.20),
+    ("issues", re.compile(r"нюанс|есть дефект|с дефектом|плохо работа"), 0.30),
 ]
+
+# Продавцы пишут «без артефактов», «не майнилась» — это не признак брака. Такие обороты вырезаем
+# перед поиском стоп-слов и флагов. Слова взяты из живой выдачи Авито (октябрь 2026).
+_NEG_K = r"(?:артефакт|вылет|ремонт|майнинг|майнер|ферм|дефект|проблем|перегрев|сбо[ея]|отвал|нарекани|нюанс)\w*"
+_NEGATIONS = [
+    re.compile(rf"\b(?:без|нет|никаких|никакого|не было|ни)\s+(?:(?!{_NEG_K})[\w\-]+\s+){{0,4}}?{_NEG_K}"
+               rf"(?:(?:\s*,\s*|\s+и\s+|\s+или\s+)(?:(?!{_NEG_K})[\w\-]+\s+){{0,2}}?{_NEG_K})*"),
+    re.compile(rf"{_NEG_K}\s+(?:нет|отсутству\w+|не\s+(?:был\w*|участвовал\w*|использовал\w*|наблюда\w+|замечен\w*|обнаружен\w*))"),
+    re.compile(r"\bне\s+(?:майнил\w*|ремонтировал\w*|чинил\w*|прошивал\w*|перепрошивал\w*|грел\w*|перегревал\w*"
+               r"|(?:был\w*\s+|использовал\w*\s+)?(?:в|для)\s+майнинг\w*|из[\s\-]под\s+майнинг\w*|с\s+фермы|после\s+ремонта)"),
+]
+# Латинские буквы-двойники внутри русских слов («бeз aртефактов») — частый приём против автопоиска.
+_LOOKALIKE = str.maketrans("aeopcxykmtbh", "аеорсхукмтвн")
+_WORD_RE = re.compile(r"[a-zа-я]+")
+
+
+def _clean_for_flags(text: str) -> str:
+    text = _WORD_RE.sub(lambda m: m.group().translate(_LOOKALIKE) if re.search("[а-я]", m.group()) else m.group(), text)
+    for rx in _NEGATIONS:
+        text = rx.sub(" ", text)
+    return text
 INFO_FLAGS = [("urgent", re.compile(r"срочно|торг|уезжаю|переезд"))]
 
 
@@ -137,8 +160,9 @@ def parse_listing(title: str, description: str = "") -> Parsed:
         return Parsed(kind="skip", skip_reason="wanted")
     if _NOT_GPU_RE.search(t):
         return Parsed(kind="skip", skip_reason="not_gpu")
+    chk = _clean_for_flags(full)
     for w in HARD_REJECT:
-        if w in full:
+        if w in chk:
             return Parsed(kind="skip", skip_reason="defective")
 
     models = _find_models(t, t)
@@ -171,7 +195,7 @@ def parse_listing(title: str, description: str = "") -> Parsed:
         p.key = p.model
 
     for name, rx, prob in SOFT_FLAGS:
-        if rx.search(full):
+        if rx.search(chk):
             p.flags[name] = prob
     if from_desc:
         p.flags["model_from_desc"] = 0.05

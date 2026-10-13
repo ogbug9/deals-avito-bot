@@ -165,3 +165,34 @@ def test_env_inline_comments(tmp_path, monkeypatch):
                    encoding="utf-8")
     c = Config.load(str(env))
     assert c.max_price == 40000 and c.search_urls == ["https://a.ru/x?s=104#frag"]
+
+
+def test_parse_live_avito_snapshot():
+    """Реальная вёрстка (октябрь 2026): у описания нет своего маркера, адрес — item-location."""
+    from pathlib import Path
+    html = (Path(__file__).parent / "fixtures" / "avito_search_2026-10.html").read_text(encoding="utf-8")
+    items = {i.id: i for i in parse_search_html(html)}
+    assert set(items) == {"8408594830", "8296264929", "8365930940", "8405468595"}
+    a = items["8408594830"]
+    assert a.price == 40000 and "5060" in a.title
+    assert a.url == "https://www.avito.ru/moskva/tovary_dlya_kompyutera/videokarta_rtx_5060_infinity3_8gb_8408594830"
+    assert a.description.startswith("Без торга") and "Старокачаловская" in a.city
+    assert items["8365930940"].description == "" and items["8365930940"].price == 12000
+    assert "донор" in items["8405468595"].description
+
+
+def test_is_blocked_statuses():
+    from gpuflip.collector import is_blocked
+    assert is_blocked(429, "") and is_blocked(439, "") and is_blocked(403, "")
+    assert is_blocked(200, "<title>Доступ ограничен: проблема с IP</title>")
+    assert not is_blocked(200, "<title>Купить видеокарту</title>") and not is_blocked(404, "")
+
+
+def test_score_cleared_when_listing_becomes_defective():
+    conn = db.connect(":memory:")
+    process(conn, cfg(), market(), "s", True, now=1000.0)
+    process(conn, cfg(), market() + [mk(500, 19000)], "s", True, now=1100.0)
+    assert conn.execute("SELECT net_profit FROM listings WHERE id='500'").fetchone()[0] > 0
+    process(conn, cfg(), market() + [mk(500, 19000, desc="кулера не крутятся")], "s", True, now=1200.0)
+    row = conn.execute("SELECT net_profit, score_json FROM listings WHERE id='500'").fetchone()
+    assert row[0] is None and row[1] is None

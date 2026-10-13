@@ -42,3 +42,34 @@ def test_number_without_context_is_not_gpu():
 def test_flags():
     p = parse_listing("RTX 3070 8GB", "майнил, не тестировал, предоплата")
     assert {"mining", "untested", "prepay"} <= set(p.flags)
+
+
+# Формулировки из живой выдачи Авито (октябрь 2026)
+@pytest.mark.parametrize("desc", [
+    "Проверена GPU-Z и FurMark под полной нагрузкой — без артефактов, сбоев и перегрева.",
+    "Не майнилась. Полностью рабочая, без вылетов и артефактов.",
+    "Не майнилась, без вскрытия и ремонта. Температуры в норме, артефактов нет.",
+    "Видeокapтa пoлнoстью рабочая, стaбильная, бeз aртефактов, вылетoв и других проблем.",
+    "Полностью рабочая, без каких либо дефектов. Ничего не ремонтировалось.",
+    "Физических дефектов нет, в майнинге не была.",
+])
+def test_negated_defects_are_fine(desc):
+    p = parse_listing("Видеокарта RTX 3070 8GB", desc)
+    assert p.ok and not p.flags
+
+
+@pytest.mark.parametrize("desc", [
+    "В итоге 1 карта кулера не крутятся совсем",
+    "Иногда при работе выключается монитор. Сейчас, почему-то, нет картинки.",
+    "Скорее всего отвалилось ядро.",
+    "В целом работает, но имеются постоянные артефакты в виде зеленых пикселей",
+    "Отвалы чипов ГПУ",
+])
+def test_real_defects_rejected(desc):
+    assert parse_listing("Видеокарта RTX 3070 8GB", desc).skip_reason == "defective"
+
+
+def test_issue_flag():
+    p = parse_listing("RTX 3090", "Работает стабильно. Есть дефект: один из кулеров плохо работает")
+    assert p.ok and "issues" in p.flags
+    assert "mining" in parse_listing("RTX 3070 8GB", "майнил полгода").flags
