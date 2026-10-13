@@ -122,3 +122,24 @@ class Scheduler:
 def is_trouble(rc: int, info: dict) -> bool:
     """Капча, блокировка, ошибка загрузки или пустая выдача там, где она должна быть, — повод замедлиться."""
     return rc in (3, 5) or bool(info.get("captcha")) or bool(info.get("blocked")) or bool(info.get("empty"))
+
+
+def dump_state(sched: Scheduler, limiter: RateLimiter) -> dict:
+    return {"times": list(limiter._times), "factor": sched.throttle.factor, "clean": sched.throttle.clean,
+            "troubles": sched.throttle.troubles, "next_full_at": sched.next_full_at, "next_light_at": sched.next_light_at}
+
+
+def load_state(sched: Scheduler, limiter: RateLimiter, state: dict) -> None:
+    """Вернуть состояние после перезапуска. Полный обход не начнётся раньше назначенного времени,
+    а запросы за последний час продолжают считаться."""
+    if not state:
+        return
+    now = limiter._clock()
+    limiter._times = deque(sorted(t for t in state.get("times", []) if isinstance(t, (int, float)) and now - 3600 < t <= now))
+    sched.throttle.factor = min(sched.throttle.cap, max(1.0, float(state.get("factor", 1.0))))
+    sched.throttle.clean = int(state.get("clean", 0))
+    sched.throttle.troubles = int(state.get("troubles", 0))
+    if state.get("next_full_at"):
+        sched.next_full_at = float(state["next_full_at"])
+    if state.get("next_light_at"):
+        sched.next_light_at = max(float(state["next_light_at"]), now + 20)   # не сразу после старта

@@ -67,7 +67,8 @@ G.tabs.market = async function () {
       h("td", null, h("span", {class: "chip " + (r.trust === "ok" ? "good" : r.trust === "low" ? "warn" : ""),
         text: r.trust === "ok" ? "достаточно" : r.trust === "low" ? "мало данных" : "оценки нет", title: "От 10 объявлений — алерты; 6–9 — только оценка; меньше — оценки нет"})),
       h("td", {class: "r num", text: G.fmt(r.median)}), h("td", {class: "r num", text: G.fmt(r.min)}),
-      h("td", {class: "r num", text: r.new}), h("td", {class: "r num", text: r.gone}),
+      h("td", {class: "r num", text: r.new}), h("td", {class: "r num", text: r.gone + " / " + r.gone_total, title: "За период / за всё время"}),
+      h("td", {class: "r num small", text: r.sold_median ? G.fmt(r.sold_median) : "—", title: r.sold_median ? "Медиана последней цены " + r.gone_total + " ушедших лотов" : "Ушедших лотов этой позиции меньше трёх"}),
       h("td", {class: "r num " + (r.change > 0 ? "up" : r.change < 0 ? "down" : ""), text: r.change == null ? "—" : (r.change > 0 ? "+" : "") + (r.change * 100).toFixed(1) + "%"}),
       h("td", null, h("span", {class: "chip " + liq[0], text: liq[1] + (r.liq_days != null ? " · " + G.days(r.liq_days) : ""),
         title: r.liq_days == null ? "Ушедших объявлений этой позиции меньше трёх" : "По " + r.liq_n + " ушедшим объявлениям"}),
@@ -77,7 +78,7 @@ G.tabs.market = async function () {
     tr.onclick = () => { G.list.restore("model=" + encodeURIComponent(r.key)); G.tab("list"); };
     return tr;
   }));
-  if (!d.rows.length) $("m-rows").append(h("tr", null, h("td", {colspan: 12, class: "small", text: "Нет позиций хотя бы с тремя объявлениями."})));
+  if (!d.rows.length) $("m-rows").append(h("tr", null, h("td", {colspan: 13, class: "small", text: "Нет позиций хотя бы с тремя объявлениями."})));
   modelsBtn();
 };
 $("m-days").onchange = () => G.tabs.market(); $("m-cat").onchange = () => G.tabs.market();
@@ -245,6 +246,7 @@ $("a-update").onclick = () => { G.say("a-msg", "Проверяю…", true); app
     const p = await G.api("/api/prefs");
     if (p["ui.view"]) { Object.assign(G.view, p["ui.view"]); G.normCols(); G.applyView(); }
     if (p["ui.profiles"]) G.profiles = p["ui.profiles"];
+    if (p["ui.compare"] && Array.isArray(p["ui.compare"].ids)) { G.cmp = p["ui.compare"].ids.slice(0, 6); G.compare.ref = p["ui.compare"].ref || G.compare.ref; }
   } catch (e) {}
   let start = "today";
   try { start = localStorage.getItem("gpuflip-tab") || "today"; } catch (e) {}

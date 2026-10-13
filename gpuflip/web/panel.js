@@ -87,7 +87,13 @@ function render(d) {
   }
   if (d.liquidity && d.liquidity.days != null) add("Ликвидность позиции", d.liquidity.label + ", ~" + G.days(d.liquidity.days) + (d.liquidity.rough ? " (оценка грубая, " + d.liquidity.n + " лотов)" : ""));
   if (d.price_drop) add("Цена снижена", "на " + G.fmt(d.price_drop) + " (" + G.pct(d.price_drop_pct) + "), было " + G.fmt(d.first_price));
-  if (d.days_listed != null) add("Висит", G.days(d.days_listed));
+  if (d.days_listed != null) add(d.gone ? "Прожило до снятия" : "Висит", G.days(d.gone && d.lifetime_days != null ? d.lifetime_days : d.days_listed));
+  if (d.posted_at) add("Опубликовано (оценка)", G.when(d.posted_at));
+  add("В базе с", G.when(d.first_seen));
+  add("Последний раз в выдаче", G.when(d.last_seen) + (d.stale ? " — давно не видели" : ""));
+  if (d.gone) add("Снято с публикации", G.when(d.gone_at) + ", последняя цена " + G.fmt(d.price));
+  if (d.checked_at) add("Карточка проверена", G.when(d.checked_at));
+  if (d.price_history && d.price_history.length > 1) add("Изменений цены", String(d.price_history.length - 1));
   const risks = Object.entries(d.flags).map(([k, v]) => (G.FLAGS[k] || k) + " — " + Math.round(v * 100) + "%");
   if (risks.length) add("Признаки риска", risks.join("; "));
   add("Состояние", d.avito_condition || "не проверено (карточка не читалась)");

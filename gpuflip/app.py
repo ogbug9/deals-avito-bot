@@ -21,7 +21,7 @@ from pathlib import Path
 from . import db, wordlists
 from .config import Config
 from .notifier import Notifier
-from .paths import home, package_dir
+from .paths import enter_home, home, setup_stdio
 
 APP_NAME = "gpuflip"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -71,6 +71,11 @@ class Worker(threading.Thread):
         self.state, self.last_start, self.last_end = "idle", 0.0, 0.0
         self.last_rc: int | None = None
         self.last_kind, self.last_info, self.last_error = "", {}, ""
+        try:                                      # расписание и счётчик запросов — с прошлого запуска
+            from .cli import restore_schedule
+            restore_schedule(self.sched, self.limiter, cfg.db_path)
+        except Exception:
+            pass
 
     # --- управление ---
     def pause(self) -> None:
@@ -355,16 +360,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--interval", type=float, default=0, help="секунд между полными обходами (по умолчанию из .env)")
     args = ap.parse_args(argv)
 
-    h = home()
-    h.mkdir(parents=True, exist_ok=True)
-    os.chdir(h)                                   # база, .env, .chrome-profile, sources.json — всё здесь
-    if not (h / ".env").exists():
-        example = package_dir().parent / ".env.example"
-        (h / ".env").write_text(example.read_text(encoding="utf-8") if example.exists() else "", encoding="utf-8")
-    wordlists.ensure_user_copies()
-
+    setup_stdio()
+    legacy = Path.cwd()
     if running_instance():                        # второй запуск — просто показать уже открытое окно
         return 0
+    h = enter_home(legacy)                        # база, .env, .chrome-profile, sources.json — всё в одной папке
+    wordlists.ensure_user_copies()
 
     from .ui import App, make_handler
     cfg = Config.load(".env")
@@ -393,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
                                         min_size=(900, 600), hidden=args.minimized)
     desk.window.events.closing += desk.on_closing
     desk.start_tray()
-    webview.start()
+    # своё постоянное хранилище окна: тема, вид и корзина сравнения не сбрасываются при перезапуске
+    webview.start(private_mode=False, storage_path=str(h / "webview"))
     desk.quit()
     return 0

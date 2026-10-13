@@ -72,6 +72,11 @@
       <option value="">Все, кроме пропущенных</option><option value="none">Без статуса</option><option value="new">Новый</option>
       <option value="checked">Проверил</option><option value="bought">Куплено</option><option value="skipped">Пропущено</option>
     </select>
+    <h3>Объявления</h3>
+    <select id="f-status" aria-label="Какие объявления показывать" title="Ушедшие лоты из базы не удаляются — их можно смотреть и анализировать">
+      <option value="">Активные</option><option value="inactive">Ушедшие (сняты с публикации)</option>
+      <option value="stale">Давно не видели</option><option value="all">Все, включая ушедшие</option>
+    </select>
     <h3>Состояние</h3>
     <label class="chk"><input type="checkbox" id="f-defect" checked> Скрыть брак и поломки</label>
     <label class="chk"><input type="checkbox" id="f-wanted" checked> Скрыть «куплю»</label>
@@ -97,6 +102,7 @@
         <option value="pct">По скидке к рынку, %</option><option value="price_asc">Дешевле</option>
         <option value="price_desc">Дороже</option><option value="drop">По снижению цены</option>
         <option value="rating">По рейтингу продавца</option>
+        <option value="first">Недавно добавленные в базу</option><option value="gone">Недавно ушедшие</option>
       </select>
       <button class="btn small" id="cols-btn" type="button" title="Колонки таблицы и профили вида">Колонки</button>
       <a class="btn small" id="export-btn" href="/api/export.csv" title="Скачать найденное в CSV (с текущими фильтрами)">CSV</a>
@@ -144,7 +150,8 @@
   <div class="small" id="m-note"></div>
   <div class="panel"><div class="tablewrap"><table class="t">
     <thead><tr><th title="Отметьте 2–4 модели для сравнения"></th><th>Позиция</th><th class="r">Объявлений</th><th>Данные</th>
-      <th class="r">Медиана</th><th class="r">Минимум</th><th class="r">Новых</th><th class="r">Ушло</th><th class="r">Изменение</th>
+      <th class="r">Медиана</th><th class="r">Минимум</th><th class="r">Новых</th><th class="r" title="Снято с публикации за выбранный период / за всё время">Ушло</th>
+      <th class="r" title="Медиана последней цены ушедших объявлений (от трёх лотов)">Цена ушедших</th><th class="r">Изменение</th>
       <th title="Медиана срока жизни ушедших объявлений">Ликвидность</th>
       <th class="r" title="Медиана, делённая на ориентировочный индекс производительности из words\analogs.json">₽ за пункт</th>
       <th>Динамика медианы</th></tr></thead>

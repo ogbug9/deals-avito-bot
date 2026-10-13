@@ -7,6 +7,7 @@ G.fmt = n => n == null ? "—" : Math.round(n).toLocaleString("ru-RU") + " ₽";
 G.num = n => (n || 0).toLocaleString("ru-RU");
 G.pct = x => x == null ? "—" : Math.round(x * 100) + "%";
 G.when = ts => ts ? new Date(ts * 1000).toLocaleString("ru-RU", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "—";
+G.day = ts => ts ? new Date(ts * 1000).toLocaleDateString("ru-RU", {day: "numeric", month: "short"}) : "—";
 G.days = d => d == null ? "—" : d < 1 ? "меньше дня" : Math.round(d) + " дн.";
 G.FLAGS = {mining: "майнинг", untested: "не тестировалась", prepay: "предоплата", repaired: "был ремонт", flashed: "прошивка",
   no_testing_allowed: "без проверки", issues: "есть нюансы", no_warranty: "без гарантии", model_from_desc: "модель не из заголовка",
@@ -85,6 +86,9 @@ G.badges = function (it, opt) {
   if (it.price_drop) chip("good", "↓ " + G.fmt(it.price_drop), "Цена снижена с " + G.fmt(it.first_price) + " (на " + G.pct(it.price_drop_pct) + ")");
   if (it.days_listed >= 7) chip("", "висит " + Math.round(it.days_listed) + " дн.", "Столько дней объявление известно — можно торговаться смелее");
   if (it.reseller) chip("warn", "перекупщик", "У продавца несколько одинаковых лотов или объявление продублировано — штраф к оценке");
+  if (it.gone) chip("bad", "ушло " + G.day(it.gone_at) + (it.lifetime_days != null ? " · прожило " + G.days(it.lifetime_days) : ""),
+    "Объявление снято с публикации (проверено по карточке " + G.when(it.checked_at) + "). Запись остаётся в базе для анализа");
+  else if (it.stale) chip("", "не видели " + Math.round(it.unseen_days) + " дн.", "Давно не попадалось в выдаче: ушло вглубь или снято. Будет проверено по карточке");
   if (it.defect) chip("bad", "брак", "В тексте есть стоп-слово — лот отсеян");
   if (it.wanted) chip("warn", "куплю", "Это объявление о покупке, а не о продаже");
   if (!opt || !opt.short) for (const f of Object.keys(it.flags)) if (f !== "reseller") chip("warn", G.FLAGS[f] || f, "Признак риска: штраф " + Math.round(it.flags[f] * 100) + "% к оценке");
@@ -101,9 +105,11 @@ G.DEFAULT_COLS = [
   ["age", "Появилось", 110, true, false], ["listed", "Висит", 80, false, false], ["drop", "Снижение", 100, false, false],
   ["seller", "Продавец", 150, false, false], ["rating", "Рейтинг", 80, false, false], ["risk", "Риск", 150, false, false],
   ["status", "Статус", 110, false, false],
+  ["first", "В базе с", 120, false, false], ["seen", "Видели", 120, false, false], ["gone", "Ушло", 110, false, false],
+  ["life", "Прожило", 90, false, false],
 ];
 G.COL_SORT = {title: "title", price: "price_asc", median: "median", disc: "pct", profit: "profit", n: "n", model: "model",
-  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating"};
+  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating", first: "first", seen: "seen", gone: "gone", life: "life"};
 G.defaultView = () => ({mode: "cards", density: "normal", font: 14, theme: "auto",
   cols: G.DEFAULT_COLS.map(c => ({key: c[0], on: c[3], pin: c[4]}))});
 G.PROFILES = {   // стартовые профили вида; свои сохраняются поверх
@@ -149,8 +155,11 @@ G.cmpToggle = function (id) {
   G.cmpChanged();
   return true;
 };
+let cmpTimer;
 G.cmpChanged = function () {
   try { localStorage.setItem("gpuflip-cmp", JSON.stringify(G.cmp)); } catch (e) {}
+  clearTimeout(cmpTimer);      // корзина хранится и на сервере — переживает перезапуск приложения
+  cmpTimer = setTimeout(() => G.api("/api/prefs", {key: "ui.compare", value: {ids: G.cmp, ref: (G.compare && G.compare.ref) || null}}).catch(() => {}), 500);
   $("cmpbar").hidden = !G.cmp.length || G.state.tab === "compare";
   $("cmp-count").textContent = "Сравнить (" + G.cmp.length + ")";
   document.querySelectorAll("[data-cmp]").forEach(cb => { cb.checked = G.cmp.includes(cb.dataset.cmp); });

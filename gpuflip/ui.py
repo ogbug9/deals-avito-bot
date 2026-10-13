@@ -19,7 +19,7 @@ from . import __version__, analogs, compare, db, modes, sources
 from .config import Config, set_env
 from .notifier import Notifier
 from .paths import home, package_dir
-from .query import FILTER_LABELS, USER_STATUSES, _int, build_query, order_by
+from .query import FILTER_LABELS, STALE_DAYS, USER_STATUSES, _int, build_query, order_by
 
 WEB_DIR = package_dir() / "web"
 STATIC_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml"}
@@ -66,6 +66,12 @@ def _row(r, now: float | None = None) -> dict:
     start = r["posted_at"] or r["first_seen"]
     d["days_listed"] = (((r["gone_at"] if r["status"] == "inactive" and r["gone_at"] else now) - start) / 86400) if start else None
     d["age_hours"] = (now - start) / 3600 if start else None
+    # жизнь объявления: когда впервые увидели, когда видели в последний раз, когда ушло и сколько прожило
+    gone = r["status"] == "inactive"
+    d["gone"] = gone
+    d["lifetime_days"] = ((r["gone_at"] - start) / 86400) if gone and r["gone_at"] and start else None
+    d["unseen_days"] = (now - r["last_seen"]) / 86400 if r["last_seen"] and not gone else None
+    d["stale"] = bool(not gone and d["unseen_days"] is not None and d["unseen_days"] >= STALE_DAYS)
     return d
 
 
@@ -203,9 +209,14 @@ class App:
                         mode_n[m] += 1
             total, clean, last, msk, fav = c.execute(
                 f"SELECT COUNT(*), SUM(defect=0 AND wanted=0), MAX(last_seen), SUM(is_msk), SUM(fav) {base}").fetchone()
+            now = time.time()
+            gone_n, since = c.execute("SELECT SUM(status='inactive'), MIN(first_seen) FROM listings").fetchone()
+            stale_n = c.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND last_seen<?",
+                                (now - STALE_DAYS * 86400,)).fetchone()[0]
             ust = {r[0]: r[1] for r in c.execute(f"SELECT user_status, COUNT(*) {base} AND user_status IS NOT NULL GROUP BY 1")}
             return {
                 "total": total, "clean": clean or 0, "last_seen": last, "fav": fav or 0,
+                "gone": gone_n or 0, "stale": stale_n, "since": since,
                 "categories": [{"key": k, "title": t, "n": cats.get(k, 0)} for k, (t, _) in sources.CATEGORIES.items()
                                if cats.get(k)],
                 "regions": [{"key": "msk", "title": "Москва", "n": msk or 0},
@@ -376,8 +387,7 @@ class App:
                     hist.setdefault(key, []).append({"day": day, "median": med, "n": n})
             gone_rows: dict[str, list] = {}
             for r in c.execute("SELECT item_key, price, first_seen, posted_at, gone_at, baseline FROM listings "
-                               "WHERE status='inactive' AND gone_at>=? AND item_key IS NOT NULL AND defect=0 AND wanted=0",
-                               (now - 60 * 86400,)):
+                               "WHERE status='inactive' AND gone_at IS NOT NULL AND item_key IS NOT NULL AND defect=0 AND wanted=0"):
                 gone_rows.setdefault(r["item_key"], []).append(r)
             table = analogs.load()
             rows = []
@@ -387,7 +397,9 @@ class App:
                 h = hist.get(key, [])
                 med = statistics.median(prices)
                 change = (med - h[0]["median"]) / h[0]["median"] if len(h) >= 2 and h[0]["median"] else None
-                lived = db.lifetimes(gone_rows.get(key, []))
+                recent = [r for r in gone_rows.get(key, []) if r["gone_at"] >= now - 60 * 86400]
+                lived = db.lifetimes(recent)
+                sold = [r["price"] for r in gone_rows.get(key, []) if r["price"]]
                 days_sell = max(0.5, statistics.median(lived)) if len(lived) >= db.LIQUIDITY_MIN else None
                 level = "none" if days_sell is None else "high" if days_sell <= 5 else "medium" if days_sell <= 14 else "low"
                 idx = analogs.index_of(key, table)
@@ -398,7 +410,9 @@ class App:
                              "trust": "ok" if len(prices) >= 10 else "low" if len(prices) >= 6 else "none",
                              "liq_days": days_sell, "liq_level": level, "liq_n": len(lived),
                              "liq_rough": days_sell is not None and len(lived) < db.LIQUIDITY_SOLID,
-                             "index": idx, "per_index": med / idx if idx else None})
+                             "index": idx, "per_index": med / idx if idx else None,
+                             "gone_total": len(gone_rows.get(key, [])),
+                             "sold_median": statistics.median(sold) if len(sold) >= 3 else None})
             rows.sort(key=lambda r: (-r["n"], r["key"]))
             return {"days": days, "rows": rows[:300], "history_days": len({x["day"] for v in hist.values() for x in v}),
                     "analogs_approx": table["approx"], "analogs_error": table["error"]}
@@ -548,7 +562,9 @@ class App:
         w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
         w.writerow(["id", "Название", "Цена", "Категория", "Позиция", "Медиана", "n", "Скидка к рынку, %", "Расчётная прибыль",
                     "Режимы", "Доверие", "Причина", "Город", "Доставка", "Состояние", "Дата", "Дней в базе", "Снижение цены",
-                    "Продавец", "Рейтинг", "Мой статус", "Заметка", "Ссылка"])
+                    "Продавец", "Рейтинг", "Мой статус", "Заметка", "Объявление", "Впервые увидели", "Последний раз видели",
+                    "Опубликовано (оценка)", "Ушло", "Прожило дней", "Ссылка"])
+        day = lambda ts: time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else ""
         now = time.time()
         for r in rows:
             d = _row(r, now)
@@ -561,7 +577,10 @@ class App:
                         "да" if d["delivery"] else "нет", d["avito_condition"] or "", d["date_text"] or "",
                         f"{d['days_listed']:.0f}" if d["days_listed"] is not None else "",
                         f"{d['price_drop']:.0f}" if d["price_drop"] else "", d["seller_name"] or "",
-                        d["rating"] if d["rating"] is not None else "", d["user_status"] or "", d["note"] or "", d["url"] or ""])
+                        d["rating"] if d["rating"] is not None else "", d["user_status"] or "", d["note"] or "",
+                        "ушло" if d["gone"] else "давно не видели" if d["stale"] else "активно",
+                        day(d["first_seen"]), day(d["last_seen"]), day(d["posted_at"]), day(d["gone_at"]) if d["gone"] else "",
+                        f"{d['lifetime_days']:.1f}" if d["lifetime_days"] is not None else "", d["url"] or ""])
         return "﻿" + buf.getvalue()
 
     # ---------------- обход / приложение ----------------

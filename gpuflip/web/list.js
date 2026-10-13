@@ -2,7 +2,7 @@
 // Список объявлений: фильтры, пресеты, чипы, четыре вида, виртуальная прокрутка, колонки, горячие клавиши.
 (function () {
 const h = G.h;
-const TEXT = ["q", "pmin", "pmax", "region", "city", "rating", "age", "hours", "model", "mode", "conf", "ustatus", "disc"];
+const TEXT = ["q", "pmin", "pmax", "region", "city", "rating", "age", "hours", "model", "mode", "conf", "ustatus", "disc", "status"];
 const CHECKS = ["delivery", "profit", "fav", "urgent", "drop"];
 const SHOWS = ["defect", "wanted", "excluded"];            // галочка «скрыть» включена → параметра нет
 const PRESETS = [
@@ -56,7 +56,7 @@ function chipsAndPresets() {
   const show = (k, text) => chips.push(h("span", {class: "chip"}, text,
     h("button", {type: "button", "aria-label": "Снять фильтр: " + text, title: "Снять фильтр", text: "×", onclick: () => clearParam(k)})));
   const names = {region: {msk: "Москва", regions: "Другие регионы"}, conf: {high: "доверие высокое", medium: "доверие среднее", low: "доверие низкое"},
-    ustatus: Object.assign({none: "без статуса"}, G.STATUS)};
+    ustatus: Object.assign({none: "без статуса"}, G.STATUS), status: {inactive: "ушедшие", stale: "давно не видели", all: "все, включая ушедшие"}};
   for (const [k, v] of p) {
     if (k === "sort" || k === "dir") continue;
     if (k === "cat") { show(k, "категории: " + L.cats.size); continue; }
@@ -168,7 +168,7 @@ function cardEl(it, i) {
   const note = h("input", {type: "text", placeholder: "Заметка", value: it.note || "", "aria-label": "Заметка"});
   note.onchange = () => A.save(it, {note: note.value}); note.onclick = e => e.stopPropagation();
   const u = G.safeUrl(it.url);
-  const el = h("article", {class: "card" + (it.defect ? " bad" : ""), "data-i": i, tabindex: "-1"}, G.pic(it.image),
+  const el = h("article", {class: "card" + (it.defect || it.gone ? " bad" : ""), "data-i": i, tabindex: "-1"}, G.pic(it.image),
     h("div", null,
       h("button", {class: "title", type: "button", text: it.title, title: "Открыть детали справа (Enter)", onclick: () => { L.setCur(i); G.panelOpen(it); }}),
       it.description ? h("div", {class: "desc", text: it.description}) : null,
@@ -231,8 +231,13 @@ const CELL = {
   rating: it => h("span", {class: "num small", text: it.rating != null ? "★ " + String(it.rating).replace(".", ",") : "—"}),
   risk: it => { const f = Object.keys(it.flags); return h("span", {class: "t " + (f.length ? "chip warn" : "small"), text: f.map(x => G.FLAGS[x] || x).join(", ") || "—"}); },
   status: it => h("span", {class: "small", text: G.STATUS[it.user_status] || "—"}),
+  first: it => h("span", {class: "num small", text: G.when(it.first_seen), title: "Когда объявление впервые попало в базу"}),
+  seen: it => h("span", {class: "num small", text: G.when(it.last_seen), title: "Когда в последний раз видели в выдаче"}),
+  gone: it => h("span", {class: "num " + (it.gone ? "" : "small"), text: it.gone ? G.when(it.gone_at) : it.stale ? "не видели " + Math.round(it.unseen_days) + " дн." : "—",
+    title: it.gone ? "Снято с публикации" : ""}),
+  life: it => h("span", {class: "num small", text: it.lifetime_days != null ? G.days(it.lifetime_days) : "—", title: "Сколько прожило объявление до снятия"}),
 };
-const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating"]);
+const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life"]);
 function cols() {
   const def = new Map(G.DEFAULT_COLS.map(c => [c[0], c]));
   const on = G.view.cols.filter(c => c.on).map(c => ({key: c.key, label: def.get(c.key)[1], w: def.get(c.key)[2], pin: c.pin}));
@@ -323,7 +328,9 @@ L.setCur = function (i) {
 L.facets = async function () {
   const f = await G.api("/api/facets");
   L.labels = f.filter_labels || {};
-  $("stat").textContent = "в базе " + G.num(f.total) + " · без брака " + G.num(f.clean) + " · обновлено " + G.when(f.last_seen);
+  $("stat").textContent = "активных " + G.num(f.total) + " · ушло " + G.num(f.gone) + " · давно не видели " + G.num(f.stale)
+    + " · копится с " + G.day(f.since) + " · обновлено " + G.when(f.last_seen);
+  $("stat").title = "База не очищается: ушедшие объявления остаются в ней с датами. Фильтр «Объявления» слева показывает их.";
   $("f-cats").replaceChildren(...f.categories.map(c => {
     const cb = h("input", {type: "checkbox", value: c.key, checked: L.cats.has(c.key)});
     cb.onchange = () => { cb.checked ? L.cats.add(c.key) : L.cats.delete(c.key); L.reload(); };
@@ -358,7 +365,7 @@ $("save-search").onclick = async () => {
 let timer;
 const soon = () => { clearTimeout(timer); timer = setTimeout(() => L.reload(), 300); };
 for (const id of ["q", "pmin", "pmax", "city"]) $("f-" + id).addEventListener("input", soon);
-for (const id of ["region", "rating", "age", "model", "mode", "conf", "ustatus", "disc"].concat(CHECKS, SHOWS))
+for (const id of ["region", "rating", "age", "model", "mode", "conf", "ustatus", "disc", "status"].concat(CHECKS, SHOWS))
   $("f-" + id).addEventListener("change", () => { delete L.pending[id]; if (id === "age") $("f-hours").value = ""; L.reload(); });
 $("f-sort").onchange = () => { L.sort = $("f-sort").value || "date"; L.dir = ""; L.reload(); };
 $("f-reset").onclick = () => { L.restore(""); L.reload(); };

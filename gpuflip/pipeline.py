@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import random
 import statistics
 import time
 
@@ -246,12 +245,16 @@ def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | Non
             "SELECT DISTINCT l.id, l.url FROM listings l JOIN candidates c ON c.listing_id=l.id "
             "WHERE l.status='active' AND l.url<>'' AND COALESCE(l.checked_at,0)<? ORDER BY COALESCE(l.checked_at,0), c.est_profit DESC LIMIT ?",
             (now - 6 * 3600, max(1, limit - 1))).fetchall()
-        others = conn.execute(
-            "SELECT id, url FROM listings WHERE status='active' AND url<>'' AND item_key IS NOT NULL AND last_seen<? "
-            "AND COALESCE(checked_at,0)<? AND id NOT IN (SELECT listing_id FROM candidates)",
-            (now - 2 * 86400, now - 2 * 86400)).fetchall()
-        picked = list(cands) + (random.sample(others, 1) if others and len(cands) < limit else [])
-        for r in picked[:limit]:
+        for r in list(cands)[:limit]:
+            todo.setdefault(r["id"], (r["url"], False))
+    # Давно не виденные: объявление ушло вглубь выдачи или снято? Проверяем понемногу, начиная с самых «старых»,
+    # сначала те, у которых определена позиция, — они нужны для срока продажи и цен ушедших лотов.
+    if cfg.verify_per_cycle > 0 and (limit > 0 or deep_limit > 0):
+        stale = conn.execute(
+            "SELECT id, url FROM listings WHERE status='active' AND url<>'' AND last_seen<? AND COALESCE(checked_at,0)<? "
+            "ORDER BY (item_key IS NULL), last_seen, id LIMIT ?",
+            (now - cfg.stale_days * 86400, now - cfg.stale_days * 86400, cfg.verify_per_cycle)).fetchall()
+        for r in stale:
             todo.setdefault(r["id"], (r["url"], False))
     changed: list[str] = []
     for lid, (url, deep) in todo.items():
@@ -267,6 +270,7 @@ def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | Non
             conn.execute("UPDATE listings SET status='inactive', gone_at=? WHERE id=?", (now, lid))
             conn.execute("UPDATE candidates SET inactive_at=COALESCE(inactive_at, ?) WHERE listing_id=?", (now, lid))
             continue
+        conn.execute("UPDATE listings SET last_seen=? WHERE id=?", (now, lid))   # карточка открылась — объявление живо
         _store_card(conn, lid, res, now)
         out["deep"] += 1
         changed.append(lid)

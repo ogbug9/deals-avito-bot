@@ -13,7 +13,10 @@ from . import db, sources
 from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv, with_page
 from .config import Config
 from .notifier import Notifier, fmt_rub
+from pathlib import Path
+
 from . import modes, wordlists
+from .paths import enter_home, setup_stdio
 from .pipeline import process, recheck, rescore
 
 
@@ -106,6 +109,26 @@ def light_plan(cfg: Config) -> list[tuple]:
     return [(s.name + " (свежие)", s.url, 1, s.category, s.region) for s in sources.load() if s.enabled and s.priority]
 
 
+def save_schedule(sched, limiter, db_path: str) -> None:
+    """Расписание, защита и счётчик запросов переживают перезапуск: иначе каждый запуск начинался бы
+    с полного обхода и обнулял часовой лимит."""
+    from .schedule import dump_state
+    conn = db.connect(db_path)
+    try:
+        db.set_setting(conn, "sched.state", dump_state(sched, limiter))
+    finally:
+        conn.close()
+
+
+def restore_schedule(sched, limiter, db_path: str) -> None:
+    from .schedule import load_state
+    conn = db.connect(db_path)
+    try:
+        load_state(sched, limiter, db.get_setting(conn, "sched.state") or {})
+    finally:
+        conn.close()
+
+
 def run_due(sched, limiter, env_file: str, notifier_factory, on_captcha=None, should_stop=lambda: False,
             log=print, full_interval: float = 0.0) -> tuple[str, int, dict] | None:
     """Выполнить цикл, которому пришло время (полный или лёгкий). None — пока рано."""
@@ -133,6 +156,7 @@ def run_due(sched, limiter, env_file: str, notifier_factory, on_captcha=None, sh
         conn.close()
     trouble = is_trouble(rc, info)
     sched.done(kind, trouble)
+    save_schedule(sched, limiter, cfg.db_path)
     if trouble:
         log(f"Защита: замедляюсь в {sched.throttle.factor:.0f} раз(а) — {json.dumps(info, ensure_ascii=False)}")
     return kind, rc, info
@@ -242,6 +266,7 @@ def cmd_watch(args, cfg: Config) -> int:
     from .schedule import RateLimiter, Scheduler
     sched = Scheduler(cfg.light_min_sec, cfg.light_max_sec, args.interval or cfg.full_interval_sec, cfg.light_cycle)
     limiter = RateLimiter(cfg.max_requests_per_hour)
+    restore_schedule(sched, limiter, cfg.db_path)
     while True:
         res = run_due(sched, limiter, args.env, lambda c: _notifier(c, args.dry_run), full_interval=args.interval)
         if res:
@@ -387,9 +412,13 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_deal)
 
     raw = sys.argv[1:] if argv is None else list(argv)
-    if raw[:1] == ["app"]:                      # у приложения свои параметры и своя домашняя папка
+    if raw[:1] == ["app"]:                      # у приложения свои параметры
         from .app import main as app_main
         return app_main(raw[1:])
     args = ap.parse_args(argv)
+    setup_stdio()
+    if getattr(args, "csv", None):              # относительный путь к CSV — от папки, где запустили команду
+        args.csv = str(Path(args.csv).resolve())
+    enter_home(Path.cwd())                      # одна папка данных для всех способов запуска
     wordlists.ensure_user_copies()   # words/*.txt рядом с базой — их можно править
     return args.fn(args, Config.load(args.env))

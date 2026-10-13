@@ -6,6 +6,7 @@ import time
 from . import modes, sources
 
 USER_STATUSES = ("new", "checked", "bought", "skipped")
+STALE_DAYS = 3.0
 SORTS = {
     "date": "COALESCE(posted_at, first_seen) DESC",
     "profit": "est_profit IS NULL, est_profit DESC",
@@ -20,6 +21,10 @@ SORTS = {
     "median": "json_extract(score_json, '$.median_ask') IS NULL, json_extract(score_json, '$.median_ask') DESC",
     "city": "city IS NULL OR city='', lc(city) ASC",
     "model": "item_key IS NULL, item_key ASC",
+    "first": "first_seen DESC",
+    "seen": "last_seen DESC",
+    "gone": "gone_at IS NULL, gone_at DESC",
+    "life": "gone_at IS NULL, (gone_at - COALESCE(posted_at, first_seen)) ASC",
 }
 # подписи фильтров — для чипов и подсказки «какой фильтр обнулил выдачу»
 FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория", "pmin": "цена от", "pmax": "цена до", "region": "регион",
@@ -27,7 +32,8 @@ FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория
                  "age": "свежесть, дней", "hours": "свежесть, часов", "model": "модель или позиция",
                  "profit": "только кандидаты", "mode": "режим поиска", "fav": "только избранное",
                  "ustatus": "мой статус", "conf": "доверие", "disc": "скидка к рынку от, %", "urgent": "срочные",
-                 "drop": "цена снижена", "ids": "выбранные лоты"}
+                 "drop": "цена снижена", "ids": "выбранные лоты",
+                 "status": "какие объявления"}
 
 
 def _one(q: dict, k: str) -> str:
@@ -55,7 +61,13 @@ def order_by(q: dict) -> str:
 def build_query(q: dict, conn=None) -> tuple[str, list]:
     """Параметры запроса → (WHERE, аргументы). q — как из parse_qs. conn нужен, чтобы учесть скрытых продавцов и модели."""
     where, args = ["1=1"], []
-    if _one(q, "status") != "all":
+    life = _one(q, "status")
+    if life == "inactive":                     # сняты с публикации (подтверждено карточкой)
+        where.append("status='inactive'")
+    elif life == "stale":                      # числятся активными, но давно не попадались в выдаче
+        where.append("status='active' AND last_seen<?")
+        args.append(time.time() - STALE_DAYS * 86400)
+    elif life != "all":
         where.append("status='active'")
     cats = [c for c in _one(q, "cat").split(",") if c in sources.CATEGORIES]
     if cats:
