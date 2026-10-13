@@ -29,6 +29,15 @@ class RawListing:
     url: str = ""
     description: str = ""
     city: str = ""
+    delivery: bool = False        # значок «Авито Доставка» в карточке
+    image: str = ""
+    date_text: str = ""           # «2 часа назад»
+    rating: float | None = None   # рейтинг продавца
+    reviews: int | None = None
+
+    @property
+    def age(self) -> float | None:
+        return age_seconds(self.date_text)
 
 
 class BlockedError(RuntimeError):
@@ -57,6 +66,33 @@ def _description(it) -> str:
     return p.get_text(" ", strip=True)
 
 
+_AGE_UNITS = (("минут", 60), ("час", 3600), ("дн", 86400), ("день", 86400), ("недел", 7 * 86400), ("месяц", 30 * 86400))
+
+
+def age_seconds(date_text: str) -> float | None:
+    """«2 часа назад» → 7200. None, если формат незнакомый."""
+    m = re.search(r"(\d+)\s+([а-я]+)", (date_text or "").lower())
+    if not m:
+        return None
+    for stem, sec in _AGE_UNITS:
+        if m.group(2).startswith(stem):
+            return int(m.group(1)) * sec
+    return None
+
+
+def _text(it, selector: str) -> str:
+    el = it.select_one(selector)
+    return el.get_text(" ", strip=True) if el else ""
+
+
+def _image(it) -> str:
+    li = it.select_one('[data-marker^="slider-image/image-"]')   # картинки грузятся лениво, адрес есть в маркере
+    if li:
+        return li["data-marker"].split("image-", 1)[1]
+    img = it.select_one('img[itemprop="image"]')
+    return img.get("src", "") if img else ""
+
+
 def parse_search_html(html: str) -> list[RawListing]:
     soup = BeautifulSoup(html, "html.parser")
     out: list[RawListing] = []
@@ -76,12 +112,41 @@ def parse_search_html(html: str) -> list[RawListing]:
             price = _digits(pe.get_text()) if pe else 0.0
         ce = (it.select_one('[data-marker="item-location"]') or it.select_one('[data-marker="item-address"]')
               or it.select_one('[class*="geo-root"]'))
+        rating = _text(it, '[data-marker="seller-rating/score"]').replace(",", ".")
+        reviews = _digits(_text(it, '[data-marker="seller-info/summary"]'))
         out.append(RawListing(
             id=str(iid), title=title, price=price, url=url,
             description=_description(it),
-            city=ce.get_text(" ", strip=True) if ce else "",
+            city=re.sub(r"\s+,", ",", ce.get_text(" ", strip=True)) if ce else "",
+            delivery=it.select_one('svg[data-icon-name="delivery"]') is not None,
+            image=_image(it),
+            date_text=_text(it, '[data-marker="item-date"]'),
+            rating=float(rating) if re.fullmatch(r"\d(\.\d+)?", rating) else None,
+            reviews=int(reviews) if reviews else None,
         ))
     return out
+
+
+_CLOSED_RE = re.compile(r"снято с публикации|объявление снято|объявление удалено|объявление закрыто|"
+                        r"срок размещения .{0,20}ист[её]к|такой страницы не существует|страница не найдена", re.I)
+_CONDITION_RE = re.compile(r"Состояние\s*:?\s*(Новое|Как новое|Отличное|Хорошее|Удовлетворительное|Б/у)", re.I)
+
+
+def parse_listing_page(status: int, html: str) -> dict:
+    """Страница карточки → жива ли она. «unknown» — капча или незнакомая вёрстка: статус не меняем."""
+    if status in (404, 410):
+        return {"state": "inactive"}
+    if is_blocked(status, html):
+        return {"state": "unknown"}
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one('[data-marker*="closed-warning"]') or _CLOSED_RE.search(soup.get_text(" ", strip=True)[:6000]):
+        return {"state": "inactive"}
+    if not (soup.select_one('[data-marker^="item-view/"]') or soup.select_one('[itemprop="price"]')):
+        return {"state": "unknown"}
+    de = soup.select_one('[data-marker="item-view/item-description"]') or soup.select_one('[itemprop="description"]')
+    cond = _CONDITION_RE.search(soup.get_text(" ", strip=True))
+    return {"state": "active", "description": de.get_text(" ", strip=True) if de else "",
+            "condition": cond.group(1) if cond else ""}
 
 
 def is_blocked(status: int, html: str) -> bool:
@@ -121,6 +186,8 @@ class AvitoCollector:
         self.proxy, self.profile_dir, self.headless, self.captcha_wait = proxy, profile_dir, headless, captcha_wait
         self.delay, self.max_pages, self._sleep = delay, max_pages, sleep
         self.last_status, self.last_html = 0, ""   # для диагностики (probe)
+        self.captchas = 0             # сколько раз за сеанс Авито просил капчу
+        self.on_captcha = None        # callback(): приложение показывает уведомление
         self._pw = self._ctx = self._page = None
 
     def __enter__(self):
@@ -152,6 +219,14 @@ class AvitoCollector:
         return ITEM_MARK in self.last_html
 
     def fetch(self, url: str) -> str:
+        html = self._fetch(url)
+        slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+        if slug and slug not in urlparse(self._page.url).path:
+            # устаревший код категории Авито молча меняет на родительский раздел — чужие объявления в базу не берём
+            raise FetchError(f"Авито перенаправил на {self._page.url[:120]} — ссылка источника устарела")
+        return html
+
+    def _fetch(self, url: str) -> str:
         try:
             if not self._page:
                 self._start()
@@ -177,17 +252,37 @@ class AvitoCollector:
                     return self.last_html
                 if not asked and time.time() - start >= 30 and not self.headless:
                     asked = True
+                    self.captchas += 1
+                    try:
+                        self._page.bring_to_front()   # окно Chrome — на передний план, капчу проходит человек
+                        if self.on_captcha:
+                            self.on_captcha()
+                    except Exception:
+                        pass
                     print(f"⏸ Авито просит капчу. Пройдите её в открытом окне Chrome (жду до {self.captcha_wait:.0f} с)…",
                           flush=True)
             raise BlockedError(f"HTTP {self.last_status}: Авито блокирует запросы (IP/капча)")
         return self.last_html
 
-    def scan(self, url: str) -> tuple[list[RawListing], bool]:
+    def check_listing(self, url: str) -> dict:
+        """Открывает карточку: жива ли она. Возвращает state: active | inactive | unknown, описание, состояние."""
+        try:
+            if not self._page:
+                self._start()
+            resp = self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            self._page.wait_for_timeout(2500)
+            html = self._page.content()
+        except Exception:
+            return {"state": "unknown"}
+        return parse_listing_page(resp.status if resp else 0, html)
+
+    def scan(self, url: str, max_pages: int | None = None) -> tuple[list[RawListing], bool]:
         """Возвращает (объявления, полный_ли_обход). Полный — дошли до последней страницы."""
         seen: dict[str, RawListing] = {}
         complete = False
         prev_ids: set[str] = set()
-        for page in range(1, self.max_pages + 1):
+        max_pages = max_pages or self.max_pages
+        for page in range(1, max_pages + 1):
             items = parse_search_html(self.fetch(with_page(url, page)))
             ids = {i.id for i in items}
             if not items or ids <= prev_ids:   # пусто или Авито отдаёт ту же последнюю страницу
@@ -196,7 +291,7 @@ class AvitoCollector:
             for i in items:
                 seen[i.id] = i
             prev_ids = ids
-            if page < self.max_pages:
+            if page < max_pages:
                 self._sleep(random.uniform(self.delay, self.delay * 2))
         return list(seen.values()), complete
 

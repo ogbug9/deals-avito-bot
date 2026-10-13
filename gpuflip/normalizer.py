@@ -48,24 +48,23 @@ _VRAM_RE = re.compile(r"(?<![0-9])(\d{1,2})\s*(?:gb|гб|g(?![a-zа-я])|г(?![�
 _PC_RE = re.compile(r"системн\w+ блок|игров\w+ пк|\bпк\b|компьютер|в сборе|сборк|ноутбук|laptop|моноблок")
 _WANTED_RE = re.compile(r"\bкуплю\b|\bищу\b|\bскуплю\b|\bобмен\b|\bменяю\b|\bвыкуп\b")
 _NOT_GPU_RE = re.compile(r"кулер|водоблок|переходник|кронштейн|подставк|райзер|термопрокладк|термопаст|"
-                         r"охлаждени|радиатор|mxm|для ноутбука|блок питания|материнск|процессор|оперативн")
+                         r"охлаждени|радиатор|блок питания|материнск|процессор|оперативн")
 
-HARD_REJECT = [
-    "на запчасти", "не работает", "нерабоч", "неисправ", "артефакт", "битая", "сгорел", "глючит",
-    "не включается", "не запускается", "нет изображения", "мертв", "мёртв", "под восстановление",
-    "на ремонт", "требует ремонта", "нужен ремонт", "полосит", "не определяется",
-    "нет картинки", "не крутится", "не крутятся", "не вращается", "отвал", "выключается монитор",
-]
-# (имя флага, regex, вероятность «плохой сделки»)
-SOFT_FLAGS = [
-    ("mining", re.compile(r"майнинг|майнер|майнил|с фермы|ферм[аы]|mining"), 0.08),
-    ("untested", re.compile(r"не тестир|не проверя|не проверен|без проверки|не пробовал|нет возможности проверить"), 0.15),
-    ("prepay", re.compile(r"предоплат|аванс"), 0.40),
-    ("repaired", re.compile(r"перепайк|реболл|reball|прогрев|после ремонта|ремонтир"), 0.20),
-    ("flashed", re.compile(r"прошит|перепрош|bios мод|модифицирован"), 0.10),
-    ("no_testing_allowed", re.compile(r"тест\w* не даю|без тест|без проверки"), 0.20),
-    ("issues", re.compile(r"нюанс|есть дефект|с дефектом|плохо работа"), 0.30),
-]
+from . import wordlists
+
+_LISTS: dict = {}
+
+
+def reload_words() -> None:
+    """Сбросить кэш списков слов (после правки файлов в words/)."""
+    _LISTS.clear()
+
+
+def _words(kind: str):
+    if kind not in _LISTS:
+        _LISTS[kind] = {"stop": wordlists.stop_words, "risk": wordlists.risk_flags, "urgent": wordlists.urgent_words}[kind]()
+    return _LISTS[kind]
+
 
 # Продавцы пишут «без артефактов», «не майнилась» — это не признак брака. Такие обороты вырезаем
 # перед поиском стоп-слов и флагов. Слова взяты из живой выдачи Авито (октябрь 2026).
@@ -74,7 +73,7 @@ _NEGATIONS = [
     re.compile(rf"\b(?:без|нет|никаких|никакого|не было|ни)\s+(?:(?!{_NEG_K})[\w\-]+\s+){{0,4}}?{_NEG_K}"
                rf"(?:(?:\s*,\s*|\s+и\s+|\s+или\s+)(?:(?!{_NEG_K})[\w\-]+\s+){{0,2}}?{_NEG_K})*"),
     re.compile(rf"{_NEG_K}\s+(?:нет|отсутству\w+|не\s+(?:был\w*|участвовал\w*|использовал\w*|наблюда\w+|замечен\w*|обнаружен\w*))"),
-    re.compile(r"\bне\s+(?:майнил\w*|ремонтировал\w*|чинил\w*|прошивал\w*|перепрошивал\w*|грел\w*|перегревал\w*"
+    re.compile(r"\bне\s+(?:майнил\w*|ремонтировал\w*|чинил\w*|прошивал\w*|перепрошивал\w*|гре[лею]т?\w*|перегрева\w*"
                r"|(?:был\w*\s+|использовал\w*\s+)?(?:в|для)\s+майнинг\w*|из[\s\-]под\s+майнинг\w*|с\s+фермы|после\s+ремонта)"),
 ]
 # Латинские буквы-двойники внутри русских слов («бeз aртефактов») — частый приём против автопоиска.
@@ -87,7 +86,6 @@ def _clean_for_flags(text: str) -> str:
     for rx in _NEGATIONS:
         text = rx.sub(" ", text)
     return text
-INFO_FLAGS = [("urgent", re.compile(r"срочно|торг|уезжаю|переезд"))]
 
 
 @dataclass
@@ -99,6 +97,8 @@ class Parsed:
     key: str = ""                     # ключ для рынка: "RTX 3060 Ti" или "RTX 3060 12GB"
     flags: dict[str, float] = field(default_factory=dict)   # флаг -> вероятность проблемы
     info: list[str] = field(default_factory=list)
+    model_source: str = ""            # title | description | fuzzy
+    mobile: bool = False              # ноутбучная карта (3070m, Max-Q, MXM) — отдельная модель и рынок
 
     @property
     def ok(self) -> bool:
@@ -150,7 +150,59 @@ def _vram(text: str) -> int | None:
     return None
 
 
-def parse_listing(title: str, description: str = "") -> Parsed:
+# Опечатки и варианты написания: слово → как его понимать. Применяется, только если обычный разбор не нашёл модель.
+TYPO_WORDS = {
+    "rxt": "rtx", "rtz": "rtx", "trx": "rtx", "rtxx": "rtx", "ртикс": "rtx", "эртэикс": "rtx", "ртыкс": "rtx",
+    "gxt": "gtx", "gtz": "gtx", "tgx": "gtx", "gtxx": "gtx", "гтикс": "gtx", "джитиикс": "gtx", "жтх": "gtx",
+    "радеон": "radeon", "radion": "radeon", "raedon": "radeon", "радик": "radeon",
+    "джифорс": "geforce", "жифорс": "geforce", "гефорс": "geforce", "geforse": "geforce", "gforce": "geforce",
+    "нвидиа": "nvidia", "нвидия": "nvidia", "энвидиа": "nvidia", "nvidea": "nvidia", "invidia": "nvidia",
+    "тай": "ti", "тиай": "ti", "титаниум": "ti", "суперка": "super", "supper": "super", "sup": "super",
+    "видяха": "видеокарта", "видюха": "видеокарта", "видик": "видеокарта", "видеокрта": "видеокарта",
+    "видиокарта": "видеокарта", "видеакарта": "видеокарта", "videokarta": "видеокарта",
+}
+_DIGIT_LOOKALIKE = str.maketrans("oоOОзЗlбБ", "000033166")
+_NUMLIKE_RE = re.compile(r"(?<![a-zа-я0-9])[0-9oозlб]{3,4}(?![0-9])")
+_SPLIT_NUM_RE = re.compile(r"((?:rtx|gtx|rx|gt)\s?)(\d{2})[\s\-](\d{2})(?!\d)")
+
+
+def _fuzzy_text(text: str) -> str:
+    text = _WORD_RE.sub(lambda m: TYPO_WORDS.get(m.group(), m.group()), text)
+    text = _NUMLIKE_RE.sub(lambda m: m.group().translate(_DIGIT_LOOKALIKE) if sum(c.isdigit() for c in m.group()) >= 2
+                           else m.group(), text)
+    return _SPLIT_NUM_RE.sub(r"\1\2\3", text)   # «rtx 30 60» → «rtx 3060»
+
+
+_MOBILE_ANY = re.compile(r"из ноутбука|от ноутбука|с ноутбука|ноутбучн|\bmxm\b|max-?q|\bmobile\b|мобильн\w+ (?:видео|верси)")
+_MOBILE_TITLE = re.compile(r"laptop|для ноутбука")
+
+
+def _is_mobile(t: str, full: str, model: str) -> bool:
+    num = re.search(r"\d+", model).group()
+    if re.search(rf"{num}\s?(?:ti\s?)?m(?![a-zа-я0-9])", full):   # 3070m, 3060 m — но не «3070 msi»
+        return True
+    return bool(_MOBILE_ANY.search(full) or _MOBILE_TITLE.search(t))
+
+
+def condition(title: str, description: str = "") -> tuple[bool, bool]:
+    """(брак, «куплю») для объявления любой категории — по тем же стоп-словам, что и для видеокарт."""
+    t = (title or "").lower().replace("ё", "е")
+    chk = _clean_for_flags(f"{t} {(description or '').lower().replace('ё', 'е')}")
+    return any(w in chk for w in _words("stop")), bool(_WANTED_RE.search(t))
+
+
+def risk_flags(text: str) -> dict[str, float]:
+    chk = _clean_for_flags((text or "").lower().replace("ё", "е"))
+    return {name: prob for name, rx, prob in _words("risk") if rx.search(chk)}
+
+
+def is_urgent(text: str) -> bool:
+    low = (text or "").lower().replace("ё", "е")
+    return any(w in low for w in _words("urgent"))
+
+
+def parse_listing(title: str, description: str = "", assume_gpu: bool = False) -> Parsed:
+    """assume_gpu — объявление из раздела «Видеокарты»: голые цифры («1060 6gb») считаем моделью (как fuzzy)."""
     t = (title or "").lower().replace("ё", "е")
     d = (description or "").lower().replace("ё", "е")
     full = f"{t} {d}"
@@ -161,17 +213,19 @@ def parse_listing(title: str, description: str = "") -> Parsed:
     if _NOT_GPU_RE.search(t):
         return Parsed(kind="skip", skip_reason="not_gpu")
     chk = _clean_for_flags(full)
-    for w in HARD_REJECT:
+    for w in _words("stop"):
         if w in chk:
             return Parsed(kind="skip", skip_reason="defective")
 
-    models = _find_models(t, t)
-    from_desc = False
+    models, source = _find_models(t, t), "title"
     if not models:
-        models = _find_models(d, full)
-        from_desc = bool(models)
+        models, source = _find_models(d, full), "description"
+    if not models:
+        ft, fd = _fuzzy_text(t), _fuzzy_text(d)
+        ctx = f"{ft} {fd}" + (" видеокарта" if assume_gpu else "")
+        models, source = (_find_models(ft, ctx) or _find_models(fd, ctx)), "fuzzy"
 
-    if _PC_RE.search(t):
+    if _PC_RE.search(_MOBILE_ANY.sub(" ", _MOBILE_TITLE.sub(" ", t)) if models else t):
         return Parsed(kind="pc", skip_reason="pc_not_supported_yet")
     if not models:
         return Parsed(kind="skip", skip_reason="model_not_found")
@@ -179,9 +233,13 @@ def parse_listing(title: str, description: str = "") -> Parsed:
         return Parsed(kind="skip", skip_reason="multi_model")
 
     p.model = next(iter(models))
+    p.model_source = source
     p.vram = _vram(t) or _vram(d)
+    p.mobile = _is_mobile(t, full, p.model)
 
-    if p.model in VRAM_VARIANTS:
+    if p.mobile:
+        p.key = f"{p.model} Mobile"          # ноутбучные чипы слабее и дешевле: в общий рынок модели не идут
+    elif p.model in VRAM_VARIANTS:
         allowed = VRAM_VARIANTS[p.model]
         if p.vram in allowed:
             p.key = f"{p.model} {p.vram}GB"
@@ -194,12 +252,18 @@ def parse_listing(title: str, description: str = "") -> Parsed:
     else:
         p.key = p.model
 
-    for name, rx, prob in SOFT_FLAGS:
+    for name, rx, prob in _words("risk"):
         if rx.search(chk):
             p.flags[name] = prob
-    if from_desc:
+    if source != "title":
         p.flags["model_from_desc"] = 0.05
-    for name, rx in INFO_FLAGS:
-        if rx.search(full):
-            p.info.append(name)
+    if is_urgent(full):
+        p.info.append("urgent")
     return p
+
+
+def _vram_near(text: str, model: str) -> int | None:
+    """Объём видеопамяти рядом с названием модели (в описании ПК «16 ГБ» чаще про ОЗУ)."""
+    num = re.search(r"\d+", model).group()
+    m = re.search(rf"{num}\s*(?:ti|super|xt)?\W{{0,6}}(\d{{1,2}})\s*(?:gb|гб|g(?![a-zа-я])|г(?![а-я]))", text)
+    return int(m.group(1)) if m and int(m.group(1)) in VALID_VRAM else None

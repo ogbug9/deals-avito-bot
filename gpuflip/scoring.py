@@ -24,6 +24,7 @@ class Score:
     market_n: int = 0
     median_ask: float = 0.0
     flags: list[str] = field(default_factory=list)
+    low_data: bool = False            # рынок 6–9 объявлений: оценка есть, алерта нет
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -38,7 +39,8 @@ def _net(buy: float, sell_price: float, days: float, risk_p: float, cfg: Config)
 
 
 def score_listing(price: float, flags: dict[str, float], stats: MarketStats, cfg: Config) -> Score:
-    s = Score(ok=False, reason="", ask=price, flags=sorted(flags), market_n=stats.n, median_ask=stats.median_ask)
+    s = Score(ok=False, reason="", ask=price, flags=sorted(flags), market_n=stats.n, median_ask=stats.median_ask,
+              low_data=stats.n < cfg.alert_market_n)
 
     if not price or price <= 0:
         s.reason = "no_price"
@@ -76,6 +78,8 @@ def score_listing(price: float, flags: dict[str, float], stats: MarketStats, cfg
         s.reason = "profit_too_small"
     elif s.net_pct < cfg.min_profit_pct:
         s.reason = "margin_too_small"
+    elif stats.n < cfg.alert_market_n:
+        s.reason = f"low_data({stats.n}<{cfg.alert_market_n})"
     else:
         s.ok, s.reason = True, "ok"
     return s

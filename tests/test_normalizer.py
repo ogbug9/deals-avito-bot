@@ -73,3 +73,62 @@ def test_issue_flag():
     p = parse_listing("RTX 3090", "Работает стабильно. Есть дефект: один из кулеров плохо работает")
     assert p.ok and "issues" in p.flags
     assert "mining" in parse_listing("RTX 3070 8GB", "майнил полгода").flags
+
+
+# --- мобильные модели: отдельный ключ и рынок ---
+@pytest.mark.parametrize("title,desc,key", [
+    ("Видеокарта RTX 3070m 8gb", "", "RTX 3070 Mobile"),
+    ("RTX 3060 mobile 6gb", "", "RTX 3060 Mobile"),
+    ("Видеокарта GTX 1660 Ti Max-Q", "", "GTX 1660 Ti Mobile"),
+    ("Видеокарта из ноутбука RTX 3070", "", "RTX 3070 Mobile"),
+    ("Видеокарта RTX 2070 8gb", "снята из ноутбука MSI, MXM", "RTX 2070 Mobile"),
+    ("Видеокарта MSI RTX 3070 8gb", "", "RTX 3070"),            # «3070 msi» — не мобильная
+    ("RTX 3070 Gaming X Trio", "подойдет для мощного пк", "RTX 3070"),
+])
+def test_mobile_models_are_separate(title, desc, key):
+    p = parse_listing(title, desc)
+    assert p.ok and p.key == key and p.mobile == key.endswith("Mobile")
+
+
+def test_laptop_itself_is_not_a_gpu():
+    assert parse_listing("Ноутбук MSI RTX 3070 Max-Q 16gb").kind == "pc"
+
+
+# --- плохое описание: источник модели ---
+@pytest.mark.parametrize("title,desc,assume,key,source", [
+    ("Видеокарта RTX 3070 8GB", "", False, "RTX 3070", "title"),
+    ("Видеокарта GTX", "продаю 1070 8gb, все отлично", False, "GTX 1070", "description"),
+    ("Видеокарта rxt 3O70", "", False, "RTX 3070", "fuzzy"),
+    ("Видяха джифорс 1О70", "", False, "GTX 1070", "fuzzy"),
+    ("rtx 30 70 gigabyte", "", False, "RTX 3070", "fuzzy"),
+    ("1060 6gb", "", True, "GTX 1060 6GB", "fuzzy"),
+    ("3060ti", "", True, "RTX 3060 Ti", "fuzzy"),
+])
+def test_model_source(title, desc, assume, key, source):
+    p = parse_listing(title, desc, assume_gpu=assume)
+    assert p.ok and p.key == key and p.model_source == source
+
+
+def test_bare_number_needs_category():
+    assert not parse_listing("1060 6gb").ok
+
+
+def test_word_files_are_editable(tmp_path, monkeypatch):
+    from gpuflip import normalizer, wordlists
+    monkeypatch.setenv("GPUFLIP_HOME", str(tmp_path))
+    d = wordlists.ensure_user_copies()
+    assert (d / "stop.txt").exists() and (d / "urgent.txt").exists()
+    assert parse_listing("RTX 3070 8GB", "скрипит вентилятор").ok
+    (d / "stop.txt").write_text("скрипит\n", encoding="utf-8")
+    (d / "risk.txt").write_text("smoke = 0.5 : пахнет\nкривая строка\n", encoding="utf-8")
+    normalizer.reload_words()
+    assert parse_listing("RTX 3070 8GB", "скрипит вентилятор").skip_reason == "defective"
+    assert parse_listing("RTX 3070 8GB", "немного пахнет").flags == {"smoke": 0.5}
+
+
+def test_spec_stop_and_risk_words():
+    assert parse_listing("RTX 3070 8GB", "сильно греется").skip_reason == "defective"
+    assert parse_listing("RTX 3070 8GB", "был в ремонте").skip_reason == "defective"
+    assert parse_listing("RTX 3070 8GB", "не греется, без ремонта, не вскрывалась").ok
+    assert "no_warranty" in parse_listing("RTX 3070 8GB", "продаю без гарантии").flags
+    assert "urgent" in parse_listing("RTX 3070 8GB", "срочно, переезд").info

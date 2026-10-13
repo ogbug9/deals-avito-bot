@@ -6,3 +6,8 @@ __pycache__/
 probe.html
 .chrome-profile/
 *.log
+sources.json
+/backups/
+/words/
+*.db-shm
+*.db-wal

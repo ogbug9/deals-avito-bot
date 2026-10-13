@@ -11,7 +11,7 @@ DAY = 86400
 
 
 def cfg(**kw):
-    c = Config(min_market_n=5, fixed_costs=400)
+    c = Config(min_market_n=5, alert_market_n=5, fixed_costs=400)
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -196,3 +196,16 @@ def test_score_cleared_when_listing_becomes_defective():
     process(conn, cfg(), market() + [mk(500, 19000, desc="кулера не крутятся")], "s", True, now=1200.0)
     row = conn.execute("SELECT net_profit, score_json FROM listings WHERE id='500'").fetchone()
     assert row[0] is None and row[1] is None
+
+
+def test_low_data_market_gives_estimate_but_no_alert():
+    conn = db.connect(":memory:")
+    c = cfg(alert_market_n=10)
+    process(conn, c, market(8), "s", True, now=1000.0)
+    out = []
+    st = process(conn, c, market(8) + [mk(500, 19000)], "s", True, notifier=Notifier(out=out.append), now=1100.0)
+    sc = json.loads(conn.execute("SELECT score_json FROM listings WHERE id='500'").fetchone()[0])
+    assert st["alerts"] == 0 and not out
+    assert sc["low_data"] and sc["reason"].startswith("low_data") and sc["net"] > 0
+    st = process(conn, c, market(12) + [mk(500, 19000)], "s", True, notifier=Notifier(out=out.append), now=1200.0)
+    assert st["alerts"] == 1

@@ -51,6 +51,21 @@ class Config:
     min_price: float = 3000.0
     max_price: float = 40000.0           # под размер оборотных денег
     min_market_n: int = 6                # минимум похожих объявлений для оценки рынка
+    alert_market_n: int = 10             # алерт — только от стольких; при 6–9 оценка показывается с пометкой «мало данных»
+    # Режимы поиска перекосов (0/1 в .env)
+    mode_bundles: bool = True            # 1: разбор целых ПК на детали
+    mode_regional: bool = True           # 2: дешёвый лот в регионе с Авито Доставкой против московской медианы
+    mode_badtext: bool = True            # 3: модель из описания / с опечаткой
+    mode_urgent: bool = True             # 4: срочные продажи — ниже порог прибыли
+    mode_categories: bool = True         # 5: ОЗУ, процессоры, БП, диски
+    regions: list[str] = field(default_factory=list)   # REGIONS=sankt-peterburg,kazan — доп. регионы для режима 2
+    region_max_pages: int = 2
+    delivery_cost: float = 500.0         # доставка из региона, ₽
+    urgent_profit_pct: float = 0.10      # порог чистой прибыли для срочных (вместо min_profit_pct)
+    fuzzy_max_ratio: float = 0.60        # fuzzy-модель: цена не выше этой доли медианы
+    bundle_min_markup: float = 0.25      # ПК: сумма деталей должна быть выше цены лота минимум на столько
+    bundle_days: float = 14.0            # разборка и продажа по частям
+    recheck_per_cycle: int = 3           # сколько карточек перепроверять за обход (кандидаты + случайные)
     max_days_to_sell: float = 21.0
     scam_price_ratio: float = 0.45       # цена ниже этой доли рынка — подозрение на развод
     max_alerts_per_scan: int = 10
@@ -73,6 +88,11 @@ class Config:
         c.headless = env.get("HEADLESS", "").lower() in ("1", "true", "yes")
         urls = env.get("SEARCH_URLS", "")
         c.search_urls = [u.strip() for u in urls.split(",") if u.strip()]
+        c.regions = [r.strip() for r in env.get("REGIONS", "").split(",") if r.strip()]
+        for name in ("bundles", "regional", "badtext", "urgent", "categories"):
+            v = env.get(f"MODE_{name.upper()}")
+            if v not in (None, ""):
+                setattr(c, f"mode_{name}", v.strip().lower() in ("1", "true", "yes", "on"))
         for name, attr, cast in [
             ("DELAY_SEC", "delay_sec", float), ("MAX_PAGES", "max_pages", int),
             ("CAPTCHA_WAIT", "captcha_wait", float),
@@ -84,6 +104,8 @@ class Config:
             ("MIN_PRICE", "min_price", float), ("MAX_PRICE", "max_price", float),
             ("MIN_MARKET_N", "min_market_n", int), ("MAX_DAYS_TO_SELL", "max_days_to_sell", float),
             ("MAX_ALERTS_PER_SCAN", "max_alerts_per_scan", int),
+            ("ALERT_MARKET_N", "alert_market_n", int), ("REGION_MAX_PAGES", "region_max_pages", int),
+            ("DELIVERY_COST", "delivery_cost", float), ("RECHECK_PER_CYCLE", "recheck_per_cycle", int),
         ]:
             f(name, attr, cast)
         return c
