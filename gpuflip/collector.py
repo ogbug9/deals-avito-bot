@@ -63,7 +63,8 @@ def _description(it) -> str:
     if (p is None or it not in p.parents or p.get("data-marker")
             or p.find_parent(attrs={"data-marker": ("item-location", "item-price")})):
         return ""
-    return p.get_text(" ", strip=True)
+    text = p.get_text(" ", strip=True)
+    return "" if re.match(r"Доставка от \d", text) else text      # это плашка доставки, а не описание
 
 
 _AGE_UNITS = (("минут", 60), ("час", 3600), ("дн", 86400), ("день", 86400), ("недел", 7 * 86400), ("месяц", 30 * 86400))
@@ -129,6 +130,7 @@ def parse_search_html(html: str) -> list[RawListing]:
 
 _CLOSED_RE = re.compile(r"снято с публикации|объявление снято|объявление удалено|объявление закрыто|"
                         r"срок размещения .{0,20}ист[её]к|такой страницы не существует|страница не найдена", re.I)
+_TITLE_CITY_RE = re.compile(r"купить в ([А-ЯЁ][^|]{1,40}?)(?= по низкой| с доставкой| \||$)")
 _CONDITION_RE = re.compile(r"Состояние\s*:?\s*(Новое|Как новое|Отличное|Хорошее|Удовлетворительное|Б/у)", re.I)
 
 
@@ -145,8 +147,10 @@ def parse_listing_page(status: int, html: str) -> dict:
         return {"state": "unknown"}
     de = soup.select_one('[data-marker="item-view/item-description"]') or soup.select_one('[itemprop="description"]')
     cond = _CONDITION_RE.search(soup.get_text(" ", strip=True))
+    # в общероссийской выдаче города нет — он есть только в заголовке карточки: «… купить в Зеленодольске …»
+    city = _TITLE_CITY_RE.search(soup.title.get_text(" ", strip=True)) if soup.title else None
     return {"state": "active", "description": de.get_text(" ", strip=True) if de else "",
-            "condition": cond.group(1) if cond else ""}
+            "condition": cond.group(1) if cond else "", "city": f"в {city.group(1)}" if city else ""}
 
 
 def is_blocked(status: int, html: str) -> bool:
@@ -215,7 +219,12 @@ class AvitoCollector:
 
     def _snapshot(self) -> bool:
         """Обновляет last_html; True, если на странице есть объявления."""
-        self.last_html = self._page.content()
+        for _ in range(8):
+            try:
+                self.last_html = self._page.content()
+                break
+            except Exception:              # страница в этот момент переходит (редирект после проверки) — ждём
+                self._page.wait_for_timeout(1500)
         return ITEM_MARK in self.last_html
 
     def fetch(self, url: str) -> str:

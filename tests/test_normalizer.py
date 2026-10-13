@@ -70,7 +70,8 @@ def test_real_defects_rejected(desc):
 
 
 def test_issue_flag():
-    p = parse_listing("RTX 3090", "Работает стабильно. Есть дефект: один из кулеров плохо работает")
+    assert parse_listing("RTX 3090", "Есть дефект: один из кулеров не держит обороты").skip_reason == "defective"
+    p = parse_listing("RTX 3090", "Работает стабильно, но один из кулеров плохо работает")
     assert p.ok and "issues" in p.flags
     assert "mining" in parse_listing("RTX 3070 8GB", "майнил полгода").flags
 
@@ -132,3 +133,7 @@ def test_spec_stop_and_risk_words():
     assert parse_listing("RTX 3070 8GB", "не греется, без ремонта, не вскрывалась").ok
     assert "no_warranty" in parse_listing("RTX 3070 8GB", "продаю без гарантии").flags
     assert "urgent" in parse_listing("RTX 3070 8GB", "срочно, переезд").info
+    assert "urgent" in parse_listing("RTX 3070 8GB", "небольшой торг возможен").info
+    for text in ("Без торга.", "Торга нет. Скидок нет.", "торг неуместен", "не торгуюсь"):
+        assert "urgent" not in parse_listing("RTX 3070 8GB", text).info
+    assert parse_listing("Память DDR4 16gb", "одна планка с дефектом").skip_reason == "defective"

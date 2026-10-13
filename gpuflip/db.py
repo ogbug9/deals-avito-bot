@@ -129,8 +129,10 @@ def is_first_scan(conn, source: str) -> bool:
     return conn.execute("SELECT 1 FROM listings WHERE source=? LIMIT 1", (source,)).fetchone() is None
 
 
-def is_moscow(region: str, city: str) -> bool:
-    return region == "moskva" or "москва" in (city or "").lower()
+def is_moscow(region: str, city: str, url: str = "") -> bool:
+    from .sources import city_from_url
+    slug = city_from_url(url)[0]
+    return region == "moskva" or slug.startswith("moskva") or "москв" in (city or "").lower()
 
 
 def upsert_listing(conn, l, source: str, now: float, baseline: bool = False,
@@ -139,7 +141,10 @@ def upsert_listing(conn, l, source: str, now: float, baseline: bool = False,
     age = getattr(l, "age", None)
     posted = now - age if age is not None else None
     weekday = time.localtime(posted).tm_wday if posted and posted > 86400 else None
-    msk = int(is_moscow(region, l.city))
+    msk = int(is_moscow(region, l.city, l.url))
+    if not l.city:                    # общероссийская выдача города не показывает — берём из адреса объявления
+        from .sources import city_from_url
+        l.city = city_from_url(l.url)[1]
     extra = (int(getattr(l, "delivery", False)), getattr(l, "image", "") or None, getattr(l, "date_text", "") or None,
              getattr(l, "rating", None), getattr(l, "reviews", None))
     row = conn.execute("SELECT price, status FROM listings WHERE id=?", (l.id,)).fetchone()

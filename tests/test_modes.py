@@ -95,6 +95,17 @@ def test_regional_needs_delivery_and_uses_moscow_median(conn):
     assert conn.execute("SELECT is_msk FROM listings WHERE id='520'").fetchone()[0] == 0
 
 
+def test_seller_city_from_listing_url(conn):
+    item = RawListing("530", "Видеокарта RTX 3070 8GB", 21000,
+                      "https://www.avito.ru/krasnodar/tovary_dlya_kompyutera/videokarta_rtx_3070_530", delivery=True)
+    msk = RawListing("531", "Видеокарта RTX 3070 8GB", 21000,
+                     "https://www.avito.ru/moskva/tovary_dlya_kompyutera/videokarta_rtx_3070_531", delivery=True)
+    run(conn, [item, msk], region="all", src="all")
+    assert conn.execute("SELECT city, is_msk FROM listings WHERE id='530'").fetchone()[:] == ("Краснодар", 0)
+    assert conn.execute("SELECT is_msk FROM listings WHERE id='531'").fetchone()[0] == 1
+    assert "из «Краснодар»" in cand(conn, 530, "regional")["reason"] and "regional" not in tags(conn, 531)
+
+
 def test_regional_skips_moscow_sellers(conn):
     st, _ = run(conn, [L(522, 21000, city="Москва", delivery=True)], region="all", src="all")
     assert "regional" not in tags(conn, 522) and "regional" not in st["modes"]
@@ -104,16 +115,28 @@ def test_regional_skips_moscow_sellers(conn):
 def test_categories_ram_normalized_per_gb(conn):
     ram = [L(600 + i, 20000 + (i % 3) * 400, "Оперативная память DDR5 64gb (2x32) Kingston Fury 6000") for i in range(12)]
     process(conn, Config(), ram, "ram", False, now=NOW, category="operativnaya_pamyat", region="moskva")
-    st, out = run(conn, [L(650, 13000, "ОЗУ DDR5 2x32gb Corsair")], category="operativnaya_pamyat", src="ram")
+    st, out = run(conn, [L(650, 13000, "ОЗУ DDR5 2x32gb Corsair 6000"),
+                         L(651, 13000, "ОЗУ DDR5 2x32gb Corsair 4800")],      # медленная — другой рынок, данных нет
+                  category="operativnaya_pamyat", src="ram")
     row = conn.execute("SELECT item_key, qty, unit_price, brand, gpu_key FROM listings WHERE id='650'").fetchone()
-    assert tuple(row) == ("RAM DDR5 64GB", 64.0, 13000 / 64, "corsair", None)
-    assert tags(conn, 650) == {"categories"} and "₽/ГБ" in cand(conn, 650, "categories")["reason"]
+    assert tuple(row) == ("RAM DDR5 64GB 5600+", 64.0, 13000 / 64, "corsair", None)
+    c = cand(conn, 650, "categories")
+    assert tags(conn, 650) == {"categories"} and "₽/ГБ" in c["reason"] and c["confidence"] == "medium"
+    assert tags(conn, 651) == set()
     assert "Режим: комплектующие" in out[0]
 
 
 def test_categories_unrecognized_position_is_counted(conn):
-    st, _ = run(conn, [L(651, 5000, "Оперативная память")], category="operativnaya_pamyat", src="ram")
+    st, _ = run(conn, [L(652, 5000, "Оперативная память")], category="operativnaya_pamyat", src="ram")
     assert st["modes"]["categories"]["rejected"] == {"position_not_recognized": 1}
+
+
+def test_motherboards_are_priced_for_bundles_only(conn):
+    mbs = [L(660 + i, 9000 + (i % 3) * 200, "Материнская плата Gigabyte B760M DS3H") for i in range(12)]
+    process(conn, Config(), mbs, "mb", False, now=NOW, category="materinskie_platy", region="moskva")
+    st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5")], category="materinskie_platy", src="mb")
+    assert tags(conn, 680) == set() and st["modes"]["categories"]["rejected"] == {"position_too_coarse": 1}
+    assert db.market_stats(conn, "MB B760", None, NOW + 60).n == 13
 
 
 # --- 1. целые ПК ---
@@ -168,6 +191,7 @@ def test_by_mode_report_and_recheck(conn):
     assert res == {"checked": 2, "inactive": 1, "unknown": 0}
     assert conn.execute("SELECT status FROM listings WHERE id='500'").fetchone()[0] == "inactive"
     assert conn.execute("SELECT avito_condition FROM listings WHERE id='510'").fetchone()[0] == "Б/у"
+    assert db.is_moscow("all", "в Москве") and not db.is_moscow("all", "в Зеленодольске")
     rep = {r["mode"]: r for r in modes.by_mode_report(conn)}
     assert rep["market"]["candidates"] == 1 and rep["market"]["inactive_share"] == 1.0
     assert rep["urgent"]["candidates"] == 1 and rep["urgent"]["inactive_share"] == 0.0
@@ -196,7 +220,10 @@ def test_parse_listing_page_states():
     from gpuflip.collector import parse_listing_page
     live = ('<html><title>RTX 3070</title><div data-marker="item-view/item-price">28 000</div>'
             '<div data-marker="item-view/item-description">Полное описание карты</div><li>Состояние: Б/у</li></html>')
-    assert parse_listing_page(200, live) == {"state": "active", "description": "Полное описание карты", "condition": "Б/у"}
+    assert parse_listing_page(200, live) == {"state": "active", "description": "Полное описание карты",
+                                             "condition": "Б/у", "city": ""}
+    titled = live.replace("<title>RTX 3070</title>", "<title>RTX 3070 купить в Зеленодольске по низкой цене | Авито</title>")
+    assert parse_listing_page(200, titled)["city"] == "в Зеленодольске"
     assert parse_listing_page(404, "")["state"] == "inactive"
     assert parse_listing_page(200, '<div data-marker="item-view/closed-warning">Объявление снято с публикации</div>')["state"] == "inactive"
     assert parse_listing_page(429, "<title>Доступ ограничен: проблема с IP</title>")["state"] == "unknown"

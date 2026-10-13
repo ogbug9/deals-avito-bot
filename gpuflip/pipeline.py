@@ -36,7 +36,7 @@ def _normalize(conn, l, category: str) -> Parsed:
 
 def process(conn, cfg: Config, listings, source: str, complete: bool,
             notifier: Notifier | None = None, now: float | None = None,
-            category: str = "", region: str = "", record_alerts: bool = True) -> dict:
+            category: str = "", region: str = "", record_alerts: bool = True, save_stats: bool = True) -> dict:
     now = time.time() if now is None else now
     scan_start = now
     stats = {"seen": len(listings), "new": 0, "gone": 0, "parsed_ok": 0, "scored": 0,
@@ -81,7 +81,8 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
             found.append((max(c.est_profit for c in alertable), row, alertable))
     stats["candidates"] = len(found)
     stats["modes"] = log.summary()
-    log.save(conn, source, now)
+    if save_stats:
+        log.save(conn, source, now)
     _save_market_history(conn, keys, now)
 
     # 4. отбор и оповещение: лучшие по чистой прибыли, без повторов
@@ -99,6 +100,44 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
             stats["alerts"] += 1
     conn.commit()
     return stats
+
+
+def rescore(conn, cfg: Config, now: float | None = None) -> dict:
+    """Пересчитать всю базу текущими правилами (после правки words/*.txt, порогов или кода). Сеть не нужна.
+
+    Два прохода: сначала позиции, потом оценки — чтобы медианы считались по уже обновлённым позициям.
+    Алерты не шлются, счётчики режимов не пишутся.
+    """
+    from .collector import RawListing
+    now = time.time() if now is None else now
+    groups: dict[tuple, list] = {}
+    for r in conn.execute("SELECT * FROM listings WHERE status='active'"):
+        l = RawListing(id=r["id"], title=r["title"] or "", price=r["price"] or 0.0, url=r["url"] or "",
+                       description=r["description"] or "", city=r["city"] or "", delivery=bool(r["delivery"]),
+                       image=r["image"] or "", rating=r["rating"], reviews=r["reviews"])
+        groups.setdefault((r["source"], r["category"], r["region"]), []).append(l)
+    total = {"listings": 0, "positions": 0, "candidates": 0, "modes": {}}
+    for final in (False, True):
+        for (source, category, region), items in groups.items():
+            for l in items:        # last_seen не трогаем: пересчёт не означает, что объявление снова видели
+                seen = conn.execute("SELECT last_seen FROM listings WHERE id=?", (l.id,)).fetchone()[0]
+                l._last_seen = seen
+            st = process(conn, cfg, items, source, False, now=now, category=category, region=region,
+                         record_alerts=False, save_stats=False)
+            for l in items:
+                conn.execute("UPDATE listings SET last_seen=? WHERE id=?", (l._last_seen, l.id))
+            if final:
+                total["listings"] += st["seen"]
+                total["positions"] += st["parsed_ok"]
+                total["candidates"] += st["candidates"]
+                for m, d in st["modes"].items():
+                    t = total["modes"].setdefault(m, {"viewed": 0, "candidates": 0, "rejected": {}})
+                    t["viewed"] += d["viewed"]
+                    t["candidates"] += d["candidates"]
+                    for k, v in d["rejected"].items():
+                        t["rejected"][k] = t["rejected"].get(k, 0) + v
+    conn.commit()
+    return total
 
 
 def _save_market_history(conn, keys: set[str], now: float) -> None:
@@ -150,6 +189,9 @@ def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | Non
         else:
             if res.get("condition"):
                 conn.execute("UPDATE listings SET avito_condition=? WHERE id=?", (res["condition"], r["id"]))
+            if res.get("city"):
+                conn.execute("UPDATE listings SET city=?, is_msk=MAX(is_msk, ?) WHERE id=? AND COALESCE(city,'')=''",
+                             (res["city"], int(db.is_moscow("", res["city"])), r["id"]))
             if len(res.get("description") or "") > 0:
                 conn.execute("UPDATE listings SET description=? WHERE id=? AND length(?)>length(COALESCE(description,''))",
                              (res["description"], r["id"], res["description"]))

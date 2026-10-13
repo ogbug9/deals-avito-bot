@@ -131,9 +131,12 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
     mode = "market" if is_gpu else "categories"
     if is_gpu and source != "title":
         mode = "badtext"
+    kind = key.split(" ")[0]
     if enabled(cfg, mode):
         log.view(mode)
-        if not sc.ok:
+        if kind == "MB":
+            log.reject(mode, "position_too_coarse")   # чипсет ≠ модель платы: позиция годится только для оценки ПК
+        elif not sc.ok:
             log.reject(mode, sc.reason)
         elif mode == "badtext" and source == "fuzzy" and row["price"] > ms.median_ask * cfg.fuzzy_max_ratio:
             log.reject(mode, "fuzzy_price_above_60pct")
@@ -141,8 +144,11 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
             how = {"description": "модель найдена только в описании", "fuzzy": "модель восстановлена из опечатки"}
             conf = {"title": "high", "description": "medium", "fuzzy": "low"}[source]
             unit = f", {row['unit_price']:.0f} {_unit(row)}" if row["unit_price"] else ""
+            coarse = ""
+            if kind in ("RAM", "PSU", "SSD", "HDD"):      # позиция не различает модель — человек должен сверить
+                conf, coarse = "medium", "; позиция без учёта модели — сверьте вручную"
             reason = (f"{how[source]} — " if mode == "badtext" else "") + \
-                     f"{base}{unit}; торг до {fmt_rub(sc.target_buy)}{_risk_note(flags)}"
+                     f"{base}{unit}; торг до {fmt_rub(sc.target_buy)}{coarse}{_risk_note(flags)}"
             out.append(Cand(mode, sc.net, sc.net_pct, reason, conf))
 
     # --- 4. срочная продажа: тот же расчёт, порог прибыли ниже ---
@@ -175,6 +181,15 @@ def _unit(row) -> str:
     return {"RAM": "₽/ГБ", "SSD": "₽/ГБ", "HDD": "₽/ГБ", "PSU": "₽/Вт"}.get((row["item_key"] or "").split(" ")[0], "")
 
 
+def _where(row) -> str:
+    from .sources import REGIONS
+    if row["city"]:
+        return row["city"] if row["city"].startswith("в ") else f"из «{row['city']}»"
+    if row["region"] and row["region"] != "all":
+        return f"({REGIONS.get(row['region'], row['region'])})"
+    return "(город в выдаче не указан)"
+
+
 def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: float, log: ModeLog) -> Cand | None:
     log.view("regional")
     if not row["delivery"]:
@@ -199,7 +214,7 @@ def _regional(conn, cfg: Config, row, flags: dict, ms_all: db.MarketStats, now: 
     local = db.market_stats(conn, row["item_key"], row["id"], now, msk=False)
     local_note = f", в регионах {_market_note(local)}" if local.n >= cfg.min_market_n else ""
     return Cand("regional", net, pct,
-                f"{row['item_key']}: {fmt_rub(row['price'])} в «{row['city'] or 'регионе'}» с Авито Доставкой; "
+                f"{row['item_key']}: {fmt_rub(row['price'])} {_where(row)} с Авито Доставкой; "
                 f"московская {_market_note(ref)} ({where}){local_note}; доставка {fmt_rub(cfg.delivery_cost)}, "
                 f"торг до {fmt_rub(buy)}{_risk_note(flags)}",
                 "high" if where == "по Москве" else "medium")
@@ -279,9 +294,9 @@ def store(conn, row, cands: list[Cand], now: float) -> None:
     """Записывает кандидатов по режимам и сводку в строку объявления; снимает устаревшие теги."""
     lid = row["id"]
     modes = [c.mode for c in cands]
-    if modes:
-        conn.execute(f"DELETE FROM candidates WHERE listing_id=? AND checked_at IS NULL AND mode NOT IN ({','.join('?' * len(modes))})",
-                     [lid] + modes)
+    # что перестало быть кандидатом (цена выросла, правила изменились) — убираем; проверенные карточкой остаются для отчёта
+    keep = ",".join("?" * len(modes)) or "''"
+    conn.execute(f"DELETE FROM candidates WHERE listing_id=? AND checked_at IS NULL AND mode NOT IN ({keep})", [lid] + modes)
     for c in cands:
         conn.execute(
             "INSERT INTO candidates(listing_id,mode,first_at,last_at,price,est_profit,est_profit_pct,reason,confidence) "

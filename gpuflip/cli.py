@@ -14,7 +14,7 @@ from .collector import AvitoCollector, BlockedError, FetchError, parse_search_ht
 from .config import Config
 from .notifier import Notifier, fmt_rub
 from . import modes, wordlists
-from .pipeline import process, recheck
+from .pipeline import process, recheck, rescore
 
 
 def _collector(cfg: Config) -> AvitoCollector:
@@ -117,6 +117,17 @@ def cmd_collect(args, cfg: Config) -> int:
     print(f"Нужно ещё ~{need}; план: " + ", ".join(f"{t[0]} ×{t[2]}" for t in todo), flush=True)
     return _run_sources(conn, cfg, _notifier(cfg, True) if args.dry_run else None, todo, target=args.target,
                         record_alerts=False)   # при наборе базы алерты не «сжигаем»: их покажет обычный обход
+
+
+def cmd_rescore(args, cfg: Config) -> int:
+    from . import normalizer
+    normalizer.reload_words()
+    res = rescore(db.connect(cfg.db_path), cfg)
+    print(f"Пересчитано {res['listings']} объявлений, позиций распознано {res['positions']}, кандидатов {res['candidates']}")
+    for m, d in res["modes"].items():
+        rej = ", ".join(f"{k} {v}" for k, v in sorted(d["rejected"].items(), key=lambda kv: -kv[1])[:6])
+        print(f"  {modes.MODE_TITLES[m]:<20} просмотрено {d['viewed']:<5} кандидатов {d['candidates']:<3} отсеяно: {rej}")
+    return 0
 
 
 def cmd_ui(args, cfg: Config) -> int:
@@ -248,6 +259,8 @@ def main(argv=None) -> int:
     p.add_argument("--target", type=int, default=2000)
     p.add_argument("--dry-run", action="store_true", help="печатать алерты в консоль (по умолчанию алертов нет)")
     p.set_defaults(fn=cmd_collect)
+    p = sub.add_parser("rescore", help="пересчитать базу текущими правилами (после правки words/*.txt), без сети")
+    p.set_defaults(fn=cmd_rescore)
     p = sub.add_parser("ui", help="локальный интерфейс с фильтрами: http://127.0.0.1:8765")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")

@@ -196,8 +196,12 @@ def risk_flags(text: str) -> dict[str, float]:
     return {name: prob for name, rx, prob in _words("risk") if rx.search(chk)}
 
 
+_NO_BARGAIN_RE = re.compile(r"без торг\w*|торг\w* (?:нет|неуместен|не уместен|не предлагать|не будет)|не торгу\w+|"
+                            r"торг\w* не\b|никакого торга")
+
+
 def is_urgent(text: str) -> bool:
-    low = (text or "").lower().replace("ё", "е")
+    low = _NO_BARGAIN_RE.sub(" ", (text or "").lower().replace("ё", "е"))   # «без торга» — не признак срочности
     return any(w in low for w in _words("urgent"))
 
 

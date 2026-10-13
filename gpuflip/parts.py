@@ -42,7 +42,19 @@ _KIT_REV_RE = re.compile(r"(\d{1,3})\s*(?:gb|гб)\s*(?:x|х|\*)\s*(\d)(?!\d)")
 _GB_RE = re.compile(r"(?<![0-9.,])(\d{1,3})\s*(?:gb|гб|g(?![a-zа-я])|гиг)")
 _FREQ_RE = re.compile(r"(?<!\d)(1333|1600|1866|2133|2400|2666|2933|3000|3200|3466|3600|3733|4000|4400|4800|5200|5600|6000|6200|6400|6600|6800|7200|8000)(?!\d)")
 _SODIMM_RE = re.compile(r"so-?dimm|sodimm|для ноутбук|ноутбучн|для ноута")
+_ECC_RE = re.compile(r"\becc\b|\breg\b|registered|rdimm|lrdimm|серверн")
 RAM_SIZES = {1, 2, 4, 8, 16, 32, 48, 64, 96, 128}
+
+
+def _ram_tier(ddr: int, freq: int | None) -> str:
+    """Скоростная группа: быстрые комплекты заметно дороже. Частота не указана — считаем базовой."""
+    if ddr == 4 and freq and freq >= 3000:
+        return " 3000+"
+    if ddr == 5 and freq and freq >= 6600:
+        return " 6600+"
+    if ddr == 5 and freq and freq >= 5600:
+        return " 5600+"
+    return ""
 
 
 def parse_ram(title: str, description: str = "") -> Part | None:
@@ -71,10 +83,12 @@ def parse_ram(title: str, description: str = "") -> Part | None:
                 sticks, per = n, each
     form = "SODIMM" if _SODIMM_RE.search(full) else "DIMM"
     f = _FREQ_RE.search(t) or _FREQ_RE.search(full)
-    key = f"RAM DDR{ddr} {total}GB" + (" SODIMM" if form == "SODIMM" else "")
+    freq = int(f.group(1)) if f else None
+    ecc = bool(_ECC_RE.search(full))
+    key = f"RAM DDR{ddr} {total}GB" + _ram_tier(ddr, freq) + (" ECC" if ecc else "") + (" SODIMM" if form == "SODIMM" else "")
     return Part("ram", key, qty=float(total), unit="₽/ГБ", brand=_brand(full, _RAM_BRANDS),
-                detail={"ddr": ddr, "gb": total, "sticks": sticks, "kit": sticks > 1, "freq": int(f.group(1)) if f else None,
-                        "form": form})
+                detail={"ddr": ddr, "gb": total, "sticks": sticks, "kit": sticks > 1, "freq": freq, "form": form,
+                        "ecc": ecc})
 
 
 # ---------------------------------------------------------------- процессоры
@@ -114,7 +128,7 @@ def find_cpus(text: str) -> list[str]:
 
 def parse_cpu(title: str, description: str = "") -> Part | None:
     t = _low(title)
-    if _CPU_KIT_RE.search(t):
+    if _CPU_KIT_RE.search(t) or "+" in t or {c for c in _CHIPSET_RE.findall(t) if c in _CHIPSETS}:
         return None                      # комплект «проц + плата» с одиночным процессором не сравнить
     cpus = find_cpus(t) or find_cpus(_low(description))
     if len(cpus) != 1:
@@ -128,6 +142,9 @@ _PSU_BRANDS = ("be quiet", "bequiet", "corsair", "seasonic", "chieftec", "deepco
                "thermaltake", "aerocool", "fsp", "zalman", "cougar", "msi", "asus", "gigabyte", "1stplayer", "xpg",
                "montech", "exegate", "powerman", "hiper", "ginzzu", "super flower", "evga", "nzxt", "formula", "ocypus",
                "accord", "crown", "gamemax", "pccooler", "silverstone", "enermax", "antec", "inwin", "delta", "hp", "dell", "lenovo")
+_PSU_TIER_A = {"be quiet", "bequiet", "corsair", "seasonic", "chieftec", "deepcool", "cooler master", "coolermaster",
+               "thermaltake", "fsp", "zalman", "cougar", "msi", "asus", "gigabyte", "1stplayer", "xpg", "montech",
+               "super flower", "evga", "nzxt", "silverstone", "enermax", "antec", "pccooler"}
 _WATT_RE = re.compile(r"(?<![0-9])(\d{3,4})\s*(?:w(?![a-z])|вт|ватт|watt)")
 _WATT_MODEL_RE = re.compile(r"(?<![0-9a-z])(?:[a-z]{1,4}[\- ]?)?(\d{3,4})(?:w|вт)?(?![0-9])")
 _CERT_RE = re.compile(r"(?:80\s*(?:\+|plus)\s*)?(titanium|platinum|gold|silver|bronze|white|standard|титан|платин|золот|серебр|бронз)")
@@ -152,8 +169,10 @@ def parse_psu(title: str, description: str = "") -> Part | None:
         cert = _CERT_RU.get(c.group(1), c.group(1).capitalize())
         cert = "" if cert in ("White", "Standard") else cert
     watts = min(PSU_WATTS, key=lambda w: abs(w - watts))
-    return Part("psu", f"PSU {watts}W" + (f" {cert}" if cert else ""), qty=float(watts), unit="₽/Вт",
-                brand=_brand(full, _PSU_BRANDS), detail={"watts": watts, "cert": cert or None})
+    brand = _brand(full, _PSU_BRANDS)
+    tier = " (бренд A)" if brand in _PSU_TIER_A else ""      # Seasonic за 650 Вт и безымянный — разные рынки
+    return Part("psu", f"PSU {watts}W" + (f" {cert}" if cert else "") + tier, qty=float(watts), unit="₽/Вт",
+                brand=brand, detail={"watts": watts, "cert": cert or None})
 
 
 # ---------------------------------------------------------------- диски

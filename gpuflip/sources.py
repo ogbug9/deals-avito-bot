@@ -37,6 +37,28 @@ REGIONS: dict[str, str] = {
 }
 
 
+# Город продавца Авито пишет в адресе объявления: /krasnodar/tovary_dlya_kompyutera/… (в общероссийской
+# выдаче другого источника города нет). Названия — для частых городов, остальные показываются как в адресе.
+CITY_NAMES = {
+    "moskva": "Москва", "moskva_zelenograd": "Зеленоград", "sankt-peterburg": "Санкт-Петербург",
+    "novosibirsk": "Новосибирск", "ekaterinburg": "Екатеринбург", "kazan": "Казань", "nizhniy_novgorod": "Нижний Новгород",
+    "chelyabinsk": "Челябинск", "samara": "Самара", "omsk": "Омск", "rostov-na-donu": "Ростов-на-Дону", "ufa": "Уфа",
+    "krasnoyarsk": "Красноярск", "voronezh": "Воронеж", "perm": "Пермь", "volgograd": "Волгоград", "krasnodar": "Краснодар",
+    "saratov": "Саратов", "tyumen": "Тюмень", "tolyatti": "Тольятти", "izhevsk": "Ижевск", "barnaul": "Барнаул",
+    "irkutsk": "Иркутск", "ulyanovsk": "Ульяновск", "habarovsk": "Хабаровск", "yaroslavl": "Ярославль",
+    "vladivostok": "Владивосток", "mahachkala": "Махачкала", "tomsk": "Томск", "orenburg": "Оренбург", "kemerovo": "Кемерово",
+    "ryazan": "Рязань", "tula": "Тула", "kaliningrad": "Калининград", "sochi": "Сочи", "balashiha": "Балашиха",
+    "himki": "Химки", "podolsk": "Подольск", "mytischi": "Мытищи", "lyubertsy": "Люберцы", "korolev": "Королёв",
+}
+
+
+def city_from_url(url: str) -> tuple[str, str]:
+    """(код города из адреса объявления, название). ('', '') — если адрес не авитовский."""
+    parts = (url or "").split("avito.ru/", 1)
+    slug = parts[1].split("/", 1)[0] if len(parts) == 2 and "/" in parts[1] else ""
+    return slug, CITY_NAMES.get(slug, slug.replace("_", " ").replace("-", " ").title() if slug else "")
+
+
 @dataclass
 class Source:
     name: str

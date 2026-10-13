@@ -4,9 +4,12 @@ from gpuflip.parts import parse_cpu, parse_disk, parse_mb, parse_pc, parse_psu, 
 
 
 @pytest.mark.parametrize("title,desc,key,gb,sticks", [
-    ("Оперативная память DDR4 16gb 3200 Kingston Fury", "", "RAM DDR4 16GB", 16, 1),
-    ("Kingston Fury DDR4 2x8gb 3200mhz", "", "RAM DDR4 16GB", 16, 2),
-    ("ОЗУ ддр5 32гб (2х16) 6000", "", "RAM DDR5 32GB", 32, 2),
+    ("Оперативная память DDR4 16gb 3200 Kingston Fury", "", "RAM DDR4 16GB 3000+", 16, 1),
+    ("Kingston Fury DDR4 2x8gb 3200mhz", "", "RAM DDR4 16GB 3000+", 16, 2),
+    ("ОЗУ ддр5 32гб (2х16) 6000", "", "RAM DDR5 32GB 5600+", 32, 2),
+    ("Galax HOF ddr5 32gb rgb 6600mhz cl38", "", "RAM DDR5 32GB 6600+", 32, 1),
+    ("Оперативная память ddr4 32gb ecc reg 2133mhz", "серверная micron", "RAM DDR4 32GB ECC", 32, 1),
+    ("Оперативная память ddr4 16gb", "", "RAM DDR4 16GB", 16, 1),
     ("Память DDR3 8 Гб для ноутбука", "", "RAM DDR3 8GB SODIMM", 8, 1),
     ("Оперативная память 16 гб", "комплект 2x8, DDR4, 2666", "RAM DDR4 16GB", 16, 2),
 ])
@@ -37,15 +40,19 @@ def test_cpu(title, key):
 
 def test_cpu_kits_and_unknown_are_skipped():
     assert parse_cpu("Комплект i5-12400F + материнская плата") is None
+    assert parse_cpu("Ryzen 7 7800X3D + ASRock B650M Pro RS WI-FI") is None
+    assert parse_cpu("Ryzen 5 5600 B550 Aorus") is None
     assert parse_cpu("Процессор для ПК") is None
     assert parse_cpu("i5-12400F и i7-9700K") is None
 
 
 @pytest.mark.parametrize("title,key,brand", [
-    ("Блок питания Deepcool PF700 700W", "PSU 700W", "deepcool"),
-    ("Блок питания be quiet! 650 Вт 80+ Gold", "PSU 650W Gold", "be quiet"),
-    ("Chieftec GPS-650A8", "PSU 650W", "chieftec"),
-    ("Блок питания 750w bronze Cougar", "PSU 750W Bronze", "cougar"),
+    ("Блок питания Deepcool PF700 700W", "PSU 700W (бренд A)", "deepcool"),
+    ("Блок питания be quiet! 650 Вт 80+ Gold", "PSU 650W Gold (бренд A)", "be quiet"),
+    ("Chieftec GPS-650A8", "PSU 650W (бренд A)", "chieftec"),
+    ("Блок питания 750w bronze Cougar", "PSU 750W Bronze (бренд A)", "cougar"),
+    ("Блок питания AeroCool kcas-600W 80+ Bronze", "PSU 600W Bronze", "aerocool"),
+    ("Блок питания 650w", "PSU 650W", ""),
 ])
 def test_psu(title, key, brand):
     p = parse_psu(title)
