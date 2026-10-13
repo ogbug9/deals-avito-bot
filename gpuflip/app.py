@@ -190,21 +190,46 @@ def set_autostart(on: bool) -> bool:
 
 
 # ------------------------------------------------------------------ обновление
-def check_updates() -> dict:
-    """git pull в папке проекта. База мигрирует сама при следующем старте (с копией)."""
-    project = Path(__file__).resolve().parent.parent
-    if getattr(sys, "frozen", False) or not (project / ".git").exists():
-        return {"ok": False, "updated": False, "message": "Обновление через git доступно только при запуске из папки проекта."}
+def _git(project: Path, *args: str, timeout: int = 60) -> tuple[int, str]:
     try:
-        before = subprocess.run(["git", "-C", str(project), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20).stdout.strip()
-        r = subprocess.run(["git", "-C", str(project), "pull", "--ff-only"], capture_output=True, text=True, timeout=120,
+        r = subprocess.run(["git", "-C", str(project), *args], capture_output=True, text=True, timeout=timeout,
                            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"})
-        after = subprocess.run(["git", "-C", str(project), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20).stdout.strip()
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return {"ok": False, "updated": False, "message": f"git не ответил: {e}"}
-    msg = (r.stdout + r.stderr).strip().splitlines()
-    return {"ok": r.returncode == 0, "updated": r.returncode == 0 and before != after,
-            "message": (msg[-1] if msg else "") or ("Обновлено" if before != after else "Уже последняя версия")}
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except FileNotFoundError:
+        return 127, "git не установлен"
+    except subprocess.TimeoutExpired:
+        return 124, "git не ответил вовремя"
+
+
+def check_updates() -> dict:
+    """git pull в папке проекта. База мигрирует сама при следующем старте (с копией). Ошибки — понятными словами."""
+    project = Path(__file__).resolve().parent.parent
+
+    def fail(message: str) -> dict:
+        return {"ok": False, "updated": False, "message": message}
+    if getattr(sys, "frozen", False):
+        return fail("Собранный exe через git не обновляется: обновите папку проекта и пересоберите его командой build.bat.")
+    if not (project / ".git").exists():
+        return fail("Папка проекта не под git — обновлять неоткуда.")
+    code, url = _git(project, "remote", "get-url", "origin", timeout=15)
+    if code == 127:
+        return fail("git не установлен или не найден в PATH.")
+    if code != 0 or not url:
+        return fail("Репозиторий не настроен: у проекта нет адреса origin. Создайте репозиторий на GitHub и выполните "
+                    "git remote add origin <адрес>, затем git push -u origin main.")
+    code, out = _git(project, "fetch", "origin")
+    if code != 0:
+        last = out.splitlines()[-1] if out else ""
+        return fail(f"Репозиторий {url} недоступен: он ещё не создан, закрыт или не выполнен вход в GitHub. "
+                    f"Сначала создайте его и сделайте git push. ({last})")
+    _, before = _git(project, "rev-parse", "HEAD", timeout=15)
+    code, out = _git(project, "pull", "--ff-only", timeout=120)
+    if code != 0:
+        last = out.splitlines()[-1] if out else ""
+        return fail(f"Обновление не применилось: локальные изменения расходятся с репозиторием или ветка не привязана. ({last})")
+    _, after = _git(project, "rev-parse", "HEAD", timeout=15)
+    return {"ok": True, "updated": before != after,
+            "message": "Обновлено до последней версии" if before != after else "Установлена последняя версия"}
 
 
 def restart() -> None:

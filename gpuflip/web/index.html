@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gpuflip</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header><div class="bar">
+  <span class="brand">gpuflip</span>
+  <span class="stat" id="stat">загрузка…</span>
+  <nav class="tabs" id="tabs" aria-label="Разделы">
+    <button data-tab="today" type="button">Сегодня</button>
+    <button data-tab="list" type="button">Объявления</button>
+    <button data-tab="compare" type="button">Сравнение</button>
+    <button data-tab="market" type="button">Рынок</button>
+    <button data-tab="deals" type="button">Сделки</button>
+    <button data-tab="status" type="button">Статус</button>
+    <button data-tab="settings" type="button">Настройки</button>
+  </nav>
+  <button class="ghost" id="theme" type="button" title="Тема оформления: авто, светлая, тёмная">Тема: авто</button>
+  <button class="ghost" id="help-btn" type="button" title="Горячие клавиши (?)">?</button>
+</div></header>
+
+<main id="main">
+<!-- Сегодня -->
+<section id="tab-today" hidden>
+  <div class="tiles" id="t-tiles"></div>
+  <div class="panel"><div class="toolbar"><h2>Лучшие кандидаты сейчас</h2>
+    <button class="btn small push" id="t-all" type="button">Все кандидаты</button></div>
+    <div id="t-best"></div></div>
+  <div class="panel"><h2>Сбор</h2><div class="small gap" id="t-collect"></div></div>
+</section>
+
+<!-- Объявления -->
+<section id="tab-list" class="split" hidden>
+  <aside class="filters" aria-label="Фильтры">
+    <h3>Сохранённые поиски</h3>
+    <div id="saved"></div>
+    <button class="link" id="save-search" type="button">Сохранить текущий поиск</button>
+    <h3>Поиск</h3>
+    <input type="search" id="f-q" placeholder="Например: rtx 3060 12gb" title="Поиск по названию и описанию. Клавиша /">
+    <h3>Категория</h3>
+    <div id="f-cats"></div>
+    <h3>Цена, ₽</h3>
+    <div class="row2">
+      <input type="number" id="f-pmin" placeholder="от" min="0" step="500" aria-label="Цена от">
+      <input type="number" id="f-pmax" placeholder="до" min="0" step="500" aria-label="Цена до">
+    </div>
+    <h3>Где</h3>
+    <select id="f-region" aria-label="Регион"><option value="">Любой регион</option></select>
+    <input type="text" id="f-city" class="gap" placeholder="Метро, улица или город">
+    <label class="chk gap"><input type="checkbox" id="f-delivery"> С Авито Доставкой</label>
+    <h3>Кандидаты</h3>
+    <label class="chk"><input type="checkbox" id="f-profit"> Только кандидаты</label>
+    <select id="f-mode" class="gap" aria-label="Режим поиска"><option value="">Любой режим поиска</option></select>
+    <select id="f-conf" class="gap" aria-label="Доверие">
+      <option value="">Любое доверие</option><option value="high">Доверие: высокое</option>
+      <option value="medium">Доверие: среднее</option><option value="low">Доверие: низкое</option>
+    </select>
+    <select id="f-model" class="gap" aria-label="Модель или позиция"><option value="">Любая модель или позиция</option></select>
+    <select id="f-disc" class="gap" aria-label="Скидка к рынку">
+      <option value="">Любая скидка к рынку</option><option value="10">Скидка от 10%</option>
+      <option value="20">Скидка от 20%</option><option value="30">Скидка от 30%</option>
+    </select>
+    <label class="chk gap"><input type="checkbox" id="f-urgent"> Срочные / с торгом</label>
+    <label class="chk"><input type="checkbox" id="f-drop"> Цена снижена</label>
+    <h3>Мои пометки</h3>
+    <label class="chk"><input type="checkbox" id="f-fav"> Только избранное</label>
+    <select id="f-ustatus" class="gap" aria-label="Мой статус">
+      <option value="">Все, кроме пропущенных</option><option value="none">Без статуса</option><option value="new">Новый</option>
+      <option value="checked">Проверил</option><option value="bought">Куплено</option><option value="skipped">Пропущено</option>
+    </select>
+    <h3>Состояние</h3>
+    <label class="chk"><input type="checkbox" id="f-defect" checked> Скрыть брак и поломки</label>
+    <label class="chk"><input type="checkbox" id="f-wanted" checked> Скрыть «куплю»</label>
+    <label class="chk"><input type="checkbox" id="f-excluded" checked> Скрыть исключённых продавцов и модели</label>
+    <h3>Продавец и дата</h3>
+    <select id="f-rating" aria-label="Рейтинг продавца"><option value="">Любой рейтинг</option><option value="4.5">Рейтинг от 4,5</option><option value="4.8">Рейтинг от 4,8</option></select>
+    <select id="f-age" class="gap" aria-label="Свежесть"><option value="">За всё время</option><option value="1">За сутки</option><option value="3">За 3 дня</option><option value="7">За неделю</option></select>
+    <select id="f-hours" hidden><option value=""></option><option value="1">1</option></select>
+  </aside>
+  <div id="list-main">
+    <div class="toolbar" id="presets" role="group" aria-label="Быстрые фильтры"></div>
+    <div class="toolbar">
+      <h2 id="count" aria-live="polite">…</h2>
+      <button class="link" id="f-reset" type="button">Сбросить все фильтры</button>
+      <span class="seg push" id="viewmode" role="group" aria-label="Вид списка">
+        <button data-view="cards" type="button" title="Карточки с описанием и причинами">Карточки</button>
+        <button data-view="compact" type="button" title="Одна строка на лот">Список</button>
+        <button data-view="table" type="button" title="Таблица с настраиваемыми колонками">Таблица</button>
+        <button data-view="grid" type="button" title="Сетка с крупными фото">Сетка</button>
+      </span>
+      <select id="f-sort" aria-label="Сортировка">
+        <option value="date">Сначала новые</option><option value="profit">По прибыли</option>
+        <option value="pct">По скидке к рынку, %</option><option value="price_asc">Дешевле</option>
+        <option value="price_desc">Дороже</option><option value="drop">По снижению цены</option>
+        <option value="rating">По рейтингу продавца</option>
+      </select>
+      <button class="btn small" id="cols-btn" type="button" title="Колонки таблицы и профили вида">Колонки</button>
+      <a class="btn small" id="export-btn" href="/api/export.csv" title="Скачать найденное в CSV (с текущими фильтрами)">CSV</a>
+    </div>
+    <div class="chips filterchips" id="filterchips" aria-label="Активные фильтры"></div>
+    <div id="cards"></div>
+    <div class="vwrap" id="vwrap" hidden>
+      <div class="vscroll" id="vscroll" tabindex="0" aria-label="Список объявлений">
+        <div class="vhead" id="vhead"></div>
+        <div class="vspace" id="vspace"></div>
+      </div>
+    </div>
+    <div id="sentinel"></div>
+  </div>
+</section>
+
+<!-- Сравнение -->
+<section id="tab-compare" hidden>
+  <div class="toolbar">
+    <h2>Сравнение лотов</h2>
+    <label class="chk"><input type="checkbox" id="c-diff"> Показать только отличия</label>
+    <select id="c-sets" class="push" aria-label="Сохранённые наборы"><option value="">Сохранённые наборы…</option></select>
+    <button class="btn small" id="c-save" type="button">Сохранить набор</button>
+    <a class="btn small" id="c-csv" href="#">CSV</a>
+    <button class="btn small" id="c-png" type="button">Картинка</button>
+    <button class="btn small" id="c-clear" type="button">Очистить</button>
+  </div>
+  <div class="small" id="c-hint">Отметьте до 6 лотов галочкой «Сравнить» в списке (клавиша <kbd>c</kbd>). Нажмите «Эталон» над колонкой — остальные покажут разницу к ней.</div>
+  <div class="panel"><div class="tablewrap" id="c-table"></div></div>
+  <div class="panel" id="cm-panel" hidden>
+    <div class="toolbar"><h2>Сравнение моделей</h2><span class="small" id="cm-note"></span>
+      <button class="btn small push" id="cm-clear" type="button">Убрать</button></div>
+    <div class="tablewrap" id="cm-table"></div>
+  </div>
+</section>
+
+<!-- Рынок -->
+<section id="tab-market" hidden>
+  <div class="toolbar">
+    <h2>Рынок по позициям</h2>
+    <button class="btn small" id="m-compare" type="button" disabled>Сравнить модели (0)</button>
+    <select id="m-cat" class="push" aria-label="Категория"><option value="">Все категории</option></select>
+    <select id="m-days" aria-label="Период"><option value="7">За 7 дней</option><option value="30">За 30 дней</option></select>
+  </div>
+  <div class="small" id="m-note"></div>
+  <div class="panel"><div class="tablewrap"><table class="t">
+    <thead><tr><th title="Отметьте 2–4 модели для сравнения"></th><th>Позиция</th><th class="r">Объявлений</th><th>Данные</th>
+      <th class="r">Медиана</th><th class="r">Минимум</th><th class="r">Новых</th><th class="r">Ушло</th><th class="r">Изменение</th>
+      <th title="Медиана срока жизни ушедших объявлений">Ликвидность</th>
+      <th class="r" title="Медиана, делённая на ориентировочный индекс производительности из words\analogs.json">₽ за пункт</th>
+      <th>Динамика медианы</th></tr></thead>
+    <tbody id="m-rows"></tbody>
+  </table></div></div>
+</section>
+
+<!-- Сделки -->
+<section id="tab-deals" hidden>
+  <div class="toolbar"><h2>Журнал сделок</h2>
+    <select id="d-days" class="push" aria-label="Период"><option value="">За всё время</option><option value="30">За 30 дней</option><option value="90">За 90 дней</option><option value="365">За год</option></select></div>
+  <div class="tiles" id="d-tiles"></div>
+  <div class="panel">
+    <div class="tablewrap"><table class="t"><thead><tr><th>Лот</th><th class="r">Покупка, ₽</th><th>Дата покупки</th><th class="r">Расходы, ₽</th>
+      <th class="r">Продажа, ₽</th><th>Дата продажи</th><th class="r">Дней</th><th class="r">Чистыми</th><th class="r">ROI</th>
+      <th class="r" title="Расчётная прибыль на момент покупки и отклонение факта от неё">Расчёт / факт</th><th>Заметка</th><th></th></tr></thead>
+      <tbody id="d-rows"></tbody></table></div>
+    <h3>Добавить сделку вручную</h3>
+    <div class="form-grid">
+      <div><label for="d-title">Что куплено</label><input type="text" id="d-title" placeholder="Например: RX 580 8GB Sapphire"></div>
+      <div><label for="d-buy">Цена покупки, ₽</label><input type="number" id="d-buy" min="0" step="100"></div>
+      <div><label for="d-costs">Расходы, ₽</label><input type="number" id="d-costs" min="0" step="50" value="0"></div>
+      <div><button class="btn primary" id="d-add" type="button">Добавить</button><span class="msg" id="d-msg"></span></div>
+    </div>
+    <div class="small">Из карточки лота запись создаёт кнопка «Куплено». Чистая прибыль = продажа − покупка − расходы.</div>
+  </div>
+</section>
+
+<!-- Статус -->
+<section id="tab-status" hidden>
+  <div class="tiles" id="s-tiles"></div>
+  <div class="panel">
+    <div class="toolbar"><h2>Сбор</h2><span class="small" id="s-line"></span>
+      <button class="btn small push" id="s-pause" type="button" hidden>Пауза</button>
+      <button class="btn small primary" id="s-run" type="button">Полный обход сейчас</button>
+      <span class="msg" id="s-msg"></span></div>
+    <div class="small" id="s-protect"></div>
+    <div class="small">Окно Chrome открывается на время обхода. Если Авито попросит капчу — её нужно пройти в этом окне самому.</div>
+    <pre id="s-log">—</pre>
+  </div>
+  <div class="panel"><h2>Режимы поиска</h2>
+    <div class="small">Просмотрено и отсеяно — за всё время; доля ушедших — среди кандидатов, чьи карточки перепроверены.</div>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Режим</th><th class="r">Просмотрено</th><th class="r">Кандидатов</th>
+      <th class="r">Средняя прибыль</th><th class="r">Ушло при проверке</th><th>Чаще всего отсеяно</th></tr></thead><tbody id="s-modes"></tbody></table></div></div>
+  <div class="panel"><h2>Последние обходы</h2>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Время</th><th>Источник</th><th class="r">Просмотрено</th><th class="r">Новых</th>
+      <th class="r">Отсеяно</th><th class="r">Кандидатов</th><th class="r">Капча</th><th>Ошибка</th></tr></thead><tbody id="s-cycles"></tbody></table></div>
+    <div class="small" id="s-backups"></div></div>
+</section>
+
+<!-- Настройки -->
+<section id="tab-settings" hidden>
+  <div class="panel">
+    <h2>Вид</h2>
+    <div class="form-grid">
+      <div><label for="p-density">Плотность</label><select id="p-density"><option value="roomy">Просторно</option><option value="normal">Нормально</option><option value="compact">Компактно</option></select></div>
+      <div><label for="p-font">Размер шрифта</label><select id="p-font"><option value="13">Мелкий</option><option value="14">Обычный</option><option value="15">Крупнее</option><option value="16">Крупный</option></select></div>
+      <div><label for="p-theme">Тема</label><select id="p-theme"><option value="auto">Как в системе</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Telegram</h2>
+    <div class="small" id="tg-state"></div>
+    <div class="form-grid">
+      <div><label for="tg-token">Токен бота (от @BotFather)</label><input type="password" id="tg-token" autocomplete="off" placeholder="оставьте пустым, чтобы не менять"></div>
+      <div><label for="tg-chat">Chat id (узнать у @userinfobot)</label><input type="text" id="tg-chat" autocomplete="off"></div>
+      <div><button class="btn primary" id="tg-save" type="button">Сохранить</button>
+        <button class="btn" id="tg-test" type="button">Тест</button></div>
+    </div>
+    <span class="msg" id="tg-msg" style="margin-left:0"></span>
+    <div class="small">Токен хранится в файле <code>.env</code> рядом с базой и в интерфейс обратно не выводится.</div>
+  </div>
+  <div class="panel">
+    <h2>Расписание сбора</h2>
+    <label class="chk gap"><input type="checkbox" id="sc-light"> Лёгкий цикл: только первая страница приоритетных источников</label>
+    <div class="form-grid">
+      <div><label for="sc-min">Лёгкий цикл: от, секунд</label><input type="number" id="sc-min" min="60" max="3600" step="10"></div>
+      <div><label for="sc-max">Лёгкий цикл: до, секунд</label><input type="number" id="sc-max" min="60" max="7200" step="10"></div>
+      <div><label for="sc-full">Полный обход: раз в, секунд</label><input type="number" id="sc-full" min="600" max="86400" step="60"></div>
+      <div><label for="sc-limit">Не больше запросов к Авито в час</label><input type="number" id="sc-limit" min="5" max="200" step="1"></div>
+      <div><button class="btn primary" id="sc-save" type="button">Сохранить</button><span class="msg" id="sc-msg"></span></div>
+    </div>
+    <div class="small">При капче или подозрительном ответе интервалы сами увеличиваются в несколько раз и возвращаются к норме после чистых циклов.</div>
+  </div>
+  <div class="panel">
+    <h2>Что собирает парсер</h2>
+    <div class="small">Каждая строка — один поиск на Авито. «Лёгкий цикл» — источник проверяется каждые несколько минут (только свежие).</div>
+    <div class="tablewrap"><table class="t" id="src-table">
+      <thead><tr><th>Вкл.</th><th title="Участвует в лёгком цикле">Лёгкий цикл</th><th>Название</th><th>Раздел</th><th>Регион</th><th>Только с доставкой</th>
+        <th>Цена от</th><th>Цена до</th><th>Слова в поиске</th><th>Страниц</th><th></th></tr></thead>
+      <tbody id="src-rows"></tbody>
+    </table></div>
+    <button class="btn" id="src-add" type="button">Добавить источник</button>
+    <button class="btn primary" id="src-save" type="button">Сохранить</button>
+    <span class="msg" id="src-msg"></span>
+    <div class="note">Авито быстро ограничивает доступ: чем больше страниц и чем чаще обход, тем выше шанс получить капчу.
+      Для «Вся Россия» включайте «Только с доставкой» — иначе попадут объявления, которые в Москву не привезти.</div>
+  </div>
+  <div class="panel">
+    <h2>Исключения</h2>
+    <div class="small">Скрытые продавцы и модели не показываются в списке и не попадают в алерты.</div>
+    <div class="chips gap" id="ex-list"></div>
+  </div>
+  <div class="panel">
+    <h2>Приложение</h2>
+    <div class="small" id="a-version"></div>
+    <label class="chk gap" id="a-autostart-row" hidden><input type="checkbox" id="a-autostart"> Запускать вместе с Windows (свёрнутым в трей)</label>
+    <p><button class="btn" id="a-update" type="button">Проверить обновления</button><span class="msg" id="a-msg"></span></p>
+    <div class="small" id="a-home"></div>
+    <div class="small">Списки слов (stop.txt, risk.txt, urgent.txt) и таблица аналогов (analogs.json) лежат в папке <b>words</b> рядом с базой.
+      После правки слов пересчитайте базу: <code>python -m gpuflip rescore</code>.</div>
+  </div>
+</section>
+</main>
+
+<aside class="panel-side" id="panel" hidden aria-label="Детали лота"></aside>
+<div class="cmpbar" id="cmpbar" hidden>
+  <span id="cmp-count">Сравнить (0)</span>
+  <button class="btn small primary" id="cmp-open" type="button">Открыть</button>
+  <button class="btn small" id="cmp-reset" type="button">Очистить</button>
+</div>
+
+<dialog id="help" aria-label="Горячие клавиши">
+  <h2>Горячие клавиши</h2>
+  <table class="kv gap"><tbody>
+    <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>следующий / предыдущий лот</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>открыть детали справа</td></tr>
+    <tr><td><kbd>o</kbd></td><td>открыть объявление на Авито</td></tr>
+    <tr><td><kbd>f</kbd></td><td>в избранное / убрать</td></tr>
+    <tr><td><kbd>c</kbd></td><td>в сравнение / убрать</td></tr>
+    <tr><td><kbd>x</kbd></td><td>пропустить лот (скрыть из списка)</td></tr>
+    <tr><td><kbd>/</kbd></td><td>перейти в строку поиска</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>закрыть панель или окно</td></tr>
+    <tr><td><kbd>?</kbd></td><td>эта шпаргалка</td></tr>
+  </tbody></table>
+  <p><button class="btn" type="button" data-close>Закрыть</button></p>
+</dialog>
+
+<dialog id="cols" aria-label="Колонки таблицы">
+  <h2>Колонки таблицы</h2>
+  <div class="small">Перетащите строку, чтобы изменить порядок. «Закрепить» — колонка остаётся слева при прокрутке.</div>
+  <div id="cols-list" class="gap"></div>
+  <h3>Профили вида</h3>
+  <div class="chips" id="profiles"></div>
+  <div class="row2 gap"><input type="text" id="profile-name" placeholder="Название профиля" aria-label="Название профиля">
+    <button class="btn" id="profile-save" type="button">Сохранить текущий вид</button></div>
+  <p><button class="btn primary" type="button" data-close>Готово</button></p>
+</dialog>
+
+<script src="/static/core.js"></script>
+<script src="/static/list.js"></script>
+<script src="/static/panel.js"></script>
+<script src="/static/compare.js"></script>
+<script src="/static/tabs.js"></script>
+</body>
+</html>

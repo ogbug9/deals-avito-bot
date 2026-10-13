@@ -137,3 +137,10 @@ def test_spec_stop_and_risk_words():
     for text in ("Без торга.", "Торга нет. Скидок нет.", "торг неуместен", "не торгуюсь"):
         assert "urgent" not in parse_listing("RTX 3070 8GB", text).info
     assert parse_listing("Память DDR4 16gb", "одна планка с дефектом").skip_reason == "defective"
+
+
+def test_preorder_and_crash_wording_from_live_base():
+    p = parse_listing("Gigabyte RTX 4070 super gaming OC 12 гб, под заказ")
+    assert p.ok and "prepay" in p.flags                      # «под заказ» = деньги вперёд, в алерты не идёт
+    assert parse_listing("GTX 1080 Ti 11Gb", "при скачках частот вылетало, плохо банкам памяти").skip_reason == "defective"
+    assert parse_listing("GTX 1080 Ti 11Gb", "работает стабильно, без вылетов и зависаний").ok

@@ -51,8 +51,8 @@ def ensure_user_copies() -> Path:
     """Кладёт копии списков в домашнюю папку, чтобы их было где править. Существующие не трогает."""
     d = home() / "words"
     d.mkdir(parents=True, exist_ok=True)
-    for name in NAMES:
-        dst = d / f"{name}.txt"
-        if not dst.exists():
-            shutil.copyfile(package_dir() / "words" / f"{name}.txt", dst)
+    for fname in [f"{name}.txt" for name in NAMES] + ["analogs.json"]:
+        dst = d / fname
+        if not dst.exists() and (package_dir() / "words" / fname).exists():
+            shutil.copyfile(package_dir() / "words" / fname, dst)
     return d
