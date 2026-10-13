@@ -53,19 +53,24 @@ class DesktopNotifier(Notifier):
 
 # ------------------------------------------------------------------ фоновый сбор
 class Worker(threading.Thread):
-    """Цикл сбора в отдельном потоке. Один Chrome на профиль: второй обход не начнётся, пока идёт первый."""
+    """Сбор в отдельном потоке: редкий полный обход и частый лёгкий цикл. Один Chrome на профиль — циклы идут
+    строго по очереди. При капче интервалы растут сами и возвращаются к норме после чистых циклов."""
 
-    def __init__(self, env_file: str, interval: float = 1200.0, paused: bool = False):
+    def __init__(self, env_file: str, interval: float = 0.0, paused: bool = False):
         super().__init__(daemon=True, name="gpuflip-worker")
+        from .schedule import RateLimiter, Scheduler
+        cfg = Config.load(env_file)
         self.env_file, self.interval = env_file, interval
+        self.sched = Scheduler(cfg.light_min_sec, cfg.light_max_sec, interval or cfg.full_interval_sec, cfg.light_cycle)
+        self.limiter = RateLimiter(cfg.max_requests_per_hour)
         self._paused = threading.Event()
         self._wake = threading.Event()
         self._halt = threading.Event()
         if paused:
             self._paused.set()
-        self.state, self.last_start, self.last_end, self.next_at = "idle", 0.0, 0.0, 0.0
+        self.state, self.last_start, self.last_end = "idle", 0.0, 0.0
         self.last_rc: int | None = None
-        self.last_error = ""
+        self.last_kind, self.last_info, self.last_error = "", {}, ""
 
     # --- управление ---
     def pause(self) -> None:
@@ -77,7 +82,7 @@ class Worker(threading.Thread):
 
     def run_now(self) -> None:
         self._paused.clear()
-        self.next_at = 0.0
+        self.sched.force("full")
         self._wake.set()
 
     def stop(self) -> None:
@@ -88,16 +93,22 @@ class Worker(threading.Thread):
     def paused(self) -> bool:
         return self._paused.is_set()
 
+    @property
+    def next_at(self) -> float:
+        return self.sched.next_at()
+
     def status(self) -> dict:
         return {"state": "paused" if self.paused and self.state != "running" else self.state,
                 "paused": self.paused, "last_start": self.last_start, "last_end": self.last_end,
-                "next_at": 0 if self.paused else self.next_at, "last_rc": self.last_rc, "last_error": self.last_error,
-                "interval": self.interval}
+                "next_at": 0 if self.paused else self.sched.next_at(), "last_rc": self.last_rc,
+                "last_kind": self.last_kind, "last_info": self.last_info, "last_error": self.last_error,
+                "interval": self.sched.full_interval, "schedule": self.sched.status(),
+                "requests_hour": self.limiter.used(), "requests_limit": self.limiter.max_per_hour}
 
     def status_line(self) -> str:
         s = self.status()
         if s["state"] == "running":
-            return "идёт обход…"
+            return "идёт " + ("лёгкий цикл…" if self.last_kind == "light" else "полный обход…")
         if s["state"] == "captcha":
             return "нужна капча в окне Chrome"
         if s["paused"]:
@@ -105,30 +116,32 @@ class Worker(threading.Thread):
         if not s["last_end"]:
             return "ещё не было обходов"
         ok = {0: "успешно", 3: "Авито ограничил доступ", 5: "ошибка сети"}.get(s["last_rc"], "ошибка")
-        return f"последний обход {time.strftime('%H:%M', time.localtime(s['last_end']))}: {ok}"
+        kind = "лёгкий цикл" if self.last_kind == "light" else "обход"
+        slow = f"; защита: интервалы ×{self.sched.throttle.factor:.0f}" if self.sched.throttle.slowed else ""
+        return f"последний {kind} {time.strftime('%H:%M', time.localtime(s['last_end']))}: {ok}{slow}"
 
     # --- цикл ---
     def run(self) -> None:
-        from .cli import _run_sources, source_plan
+        from .cli import run_due
         while not self._halt.is_set():
-            if self.paused or time.time() < self.next_at:
+            if self.paused or self.sched.due() is None:
                 self._wake.wait(timeout=5)
                 self._wake.clear()
                 continue
+            self.last_kind = self.sched.due() or ""
             self.state, self.last_start, self.last_error = "running", time.time(), ""
             try:
-                cfg = Config.load(self.env_file)
-                conn = db.connect(cfg.db_path)
-                notifier = DesktopNotifier(cfg.tg_token, cfg.tg_chat_id, out=lambda t: _log(t))
-                self.last_rc = _run_sources(conn, cfg, notifier, source_plan(cfg), on_captcha=self._on_captcha,
-                                            should_stop=lambda: self._halt.is_set() or self.paused)
-                conn.close()
+                res = run_due(self.sched, self.limiter, self.env_file,
+                              lambda cfg: DesktopNotifier(cfg.tg_token, cfg.tg_chat_id, out=lambda t: _log(t)),
+                              on_captcha=self._on_captcha, should_stop=lambda: self._halt.is_set() or self.paused,
+                              log=_log, full_interval=self.interval)
+                if res:
+                    self.last_kind, self.last_rc, self.last_info = res
             except Exception as e:           # поток сбора не должен умирать молча
                 self.last_rc, self.last_error = 1, f"{type(e).__name__}: {e}"
+                self.sched.done(self.last_kind or "full", True)
                 _log(f"ошибка обхода: {self.last_error}")
             self.last_end, self.state = time.time(), "idle"
-            pause = self.interval * random.uniform(0.8, 1.3) * (4 if self.last_rc == 3 else 1)
-            self.next_at = time.time() + pause
 
     def _on_captcha(self) -> None:
         self.state = "captcha"
@@ -314,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--minimized", action="store_true", help="стартовать в трее, окно не показывать")
     ap.add_argument("--no-collect", action="store_true", help="сбор на паузе при старте")
     ap.add_argument("--no-window", action="store_true", help="без окна и трея: только сервер и сбор (для проверки)")
-    ap.add_argument("--interval", type=float, default=1200, help="секунд между обходами")
+    ap.add_argument("--interval", type=float, default=0, help="секунд между полными обходами (по умолчанию из .env)")
     args = ap.parse_args(argv)
 
     h = home()

@@ -53,11 +53,16 @@ def source_plan(cfg: Config) -> list[tuple]:
 
 
 def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_alerts: bool = True,
-                 on_captcha=None, should_stop=lambda: False) -> int:
-    """todo: (название, ссылка, страниц, категория, регион). target>0 — остановиться, когда в базе столько активных."""
+                 on_captcha=None, should_stop=lambda: False, limiter=None, info: dict | None = None,
+                 do_recheck: bool = True) -> int:
+    """todo: (название, ссылка, страниц, категория, регион). target>0 — остановиться, когда в базе столько активных.
+    info заполняется итогами: капчи, блокировка, ошибки, пустые выдачи, загружено страниц, новых, кандидатов."""
     rc = 0
+    info = info if info is not None else {}
+    info.update({"captcha": 0, "blocked": 0, "errors": 0, "empty": 0, "pages": 0, "seen": 0, "new": 0, "candidates": 0})
     with _collector(cfg) as col:
         col.on_captcha = on_captcha
+        col.limiter = limiter
         for n, (name, url, pages, category, region) in enumerate(todo):
             if should_stop() or (target and _active(conn) >= target):
                 break
@@ -69,24 +74,68 @@ def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_aler
             except BlockedError as e:
                 _log_cycle(conn, started, name, captcha=col.captchas - cap0, blocked=1, error=str(e))
                 print(f"⛔ {e}. Снизьте частоту, смените IP/прокси или используйте --csv.", file=sys.stderr, flush=True)
+                info.update(captcha=col.captchas, blocked=1, pages=col.requests)
                 return 3   # дальше по списку идти бессмысленно — только продлим блокировку
             except FetchError as e:
                 _log_cycle(conn, started, name, captcha=col.captchas - cap0, error=str(e))
                 print(f"⛔ Браузер/сеть: {e}", file=sys.stderr, flush=True)
+                info["errors"] += 1
                 rc = 5
                 continue
             stats = process(conn, cfg, items, source=url, complete=complete, notifier=notifier,
                             category=category, region=region, record_alerts=record_alerts)
             _log_cycle(conn, started, name, stats, captcha=col.captchas - cap0)
+            info["empty"] += not items            # выдача без объявлений — подозрительный ответ
+            for k in ("seen", "new", "candidates"):
+                info[k] += stats[k]
             print(f"{name}: {json.dumps(stats, ensure_ascii=False)} | в базе {_active(conn)}", flush=True)
-        if rc == 0 and not target and not should_stop() and cfg.recheck_per_cycle > 0:
+        if (do_recheck and rc == 0 and not target and not should_stop()
+                and (cfg.recheck_per_cycle > 0 or cfg.deep_per_cycle > 0)):
             def check(u):
                 time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2))
                 return col.check_listing(u)
-            res = recheck(conn, cfg, check)
+            res = recheck(conn, cfg, check, notifier=notifier)
             if res["checked"]:
-                print(f"Перепроверка карточек: {json.dumps(res, ensure_ascii=False)}", flush=True)
+                print(f"Карточки: {json.dumps(res, ensure_ascii=False)}", flush=True)
+        info.update(captcha=col.captchas, pages=col.requests)
     return rc
+
+
+def light_plan(cfg: Config) -> list[tuple]:
+    """Лёгкий цикл: только первая страница свежих по приоритетным источникам."""
+    return [(s.name + " (свежие)", s.url, 1, s.category, s.region) for s in sources.load() if s.enabled and s.priority]
+
+
+def run_due(sched, limiter, env_file: str, notifier_factory, on_captcha=None, should_stop=lambda: False,
+            log=print, full_interval: float = 0.0) -> tuple[str, int, dict] | None:
+    """Выполнить цикл, которому пришло время (полный или лёгкий). None — пока рано."""
+    from .schedule import is_trouble
+    cfg = Config.load(env_file)
+    sched.configure(cfg.light_min_sec, cfg.light_max_sec, full_interval or cfg.full_interval_sec, cfg.light_cycle)
+    limiter.max_per_hour = max(1, cfg.max_requests_per_hour)
+    kind = sched.due()
+    if kind is None:
+        return None
+    todo = source_plan(cfg) if kind == "full" else light_plan(cfg)
+    if not todo:                                   # приоритетных источников нет — лёгкий цикл пропускаем
+        sched.done(kind, False)
+        return kind, 0, {}
+    if kind == "full":
+        saved = db.auto_backup(cfg.db_path)
+        if saved:
+            log(f"Суточная копия базы: {saved}")
+    conn = db.connect(cfg.db_path)
+    info: dict = {}
+    try:
+        rc = _run_sources(conn, cfg, notifier_factory(cfg), todo, on_captcha=on_captcha, should_stop=should_stop,
+                          limiter=limiter, info=info, do_recheck=kind == "full")
+    finally:
+        conn.close()
+    trouble = is_trouble(rc, info)
+    sched.done(kind, trouble)
+    if trouble:
+        log(f"Защита: замедляюсь в {sched.throttle.factor:.0f} раз(а) — {json.dumps(info, ensure_ascii=False)}")
+    return kind, rc, info
 
 
 def _log_cycle(conn, started: float, name: str, stats: dict | None = None, captcha: int = 0, blocked: int = 0,
@@ -189,11 +238,19 @@ def cmd_ui(args, cfg: Config) -> int:
 
 
 def cmd_watch(args, cfg: Config) -> int:
+    """Постоянный сбор: редкий полный обход + лёгкий цикл по приоритетным источникам, с защитой от блокировок."""
+    from .schedule import RateLimiter, Scheduler
+    sched = Scheduler(cfg.light_min_sec, cfg.light_max_sec, args.interval or cfg.full_interval_sec, cfg.light_cycle)
+    limiter = RateLimiter(cfg.max_requests_per_hour)
     while True:
-        rc = cmd_scan(args, cfg)
-        pause = args.interval * random.uniform(0.8, 1.3) * (4 if rc == 3 else 1)
-        print(f"сплю {pause / 60:.0f} мин")
-        time.sleep(pause)
+        res = run_due(sched, limiter, args.env, lambda c: _notifier(c, args.dry_run), full_interval=args.interval)
+        if res:
+            kind, rc, info = res
+            nxt = time.strftime("%H:%M", time.localtime(sched.next_at()))
+            print(f"[{time.strftime('%H:%M:%S')}] {'полный обход' if kind == 'full' else 'лёгкий цикл'}: код {rc}, "
+                  f"страниц {info.get('pages', 0)}, новых {info.get('new', 0)}, кандидатов {info.get('candidates', 0)}; "
+                  f"запросов за час {limiter.used()}/{limiter.max_per_hour}; следующий около {nxt}", flush=True)
+        time.sleep(5)
 
 
 def report_by_mode(conn) -> None:
@@ -302,7 +359,7 @@ def main(argv=None) -> int:
         p.add_argument("--csv")
         p.add_argument("--dry-run", action="store_true", help="не слать в Telegram, печатать в консоль")
         if name == "watch":
-            p.add_argument("--interval", type=float, default=900, help="секунд между обходами")
+            p.add_argument("--interval", type=float, default=0, help="секунд между полными обходами (по умолчанию из .env)")
         p.set_defaults(fn=fn)
     p = sub.add_parser("report"); p.add_argument("--top", type=int, default=15)
     p.add_argument("--by-mode", action="store_true", help="сводка по режимам поиска")

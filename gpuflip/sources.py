@@ -70,6 +70,7 @@ class Source:
     query: str = ""
     max_pages: int = 3
     enabled: bool = True
+    priority: bool = False           # участвует в лёгком цикле (1-я страница раз в несколько минут)
 
     @property
     def url(self) -> str:
@@ -97,13 +98,13 @@ class Source:
         s.name = str(s.name).strip() or f"{CATEGORIES[s.category][0]} — {REGIONS.get(s.region, s.region)}"
         s.pmin, s.pmax = max(0, int(s.pmin or 0)), max(0, int(s.pmax or 0))
         s.max_pages = min(20, max(1, int(s.max_pages or 1)))
-        s.delivery_only, s.enabled = bool(s.delivery_only), bool(s.enabled)
+        s.delivery_only, s.enabled, s.priority = bool(s.delivery_only), bool(s.enabled), bool(s.priority)
         return s
 
 
 DEFAULT_SOURCES = [
-    Source("Видеокарты — Москва", "videokarty", "moskva", max_pages=3),
-    Source("Видеокарты — Россия, с доставкой", "videokarty", "all", delivery_only=True, max_pages=3),
+    Source("Видеокарты — Москва", "videokarty", "moskva", max_pages=3, priority=True),
+    Source("Видеокарты — Россия, с доставкой", "videokarty", "all", delivery_only=True, max_pages=3, priority=True),
     Source("Системные блоки — Москва", "pc", "moskva", max_pages=2),
     Source("Процессоры — Москва", "protsessory", "moskva", max_pages=2),
     Source("Материнские платы — Москва", "materinskie_platy", "moskva", max_pages=2),

@@ -34,6 +34,8 @@ class RawListing:
     date_text: str = ""           # «2 часа назад»
     rating: float | None = None   # рейтинг продавца
     reviews: int | None = None
+    seller_id: str = ""           # код продавца из ссылки /brands/… или /user/… (есть не у всех)
+    seller_name: str = ""
 
     @property
     def age(self) -> float | None:
@@ -94,6 +96,23 @@ def _image(it) -> str:
     return img.get("src", "") if img else ""
 
 
+_SELLER_HREF_RE = re.compile(r"/(?:brands|user)/([0-9a-zA-Z_\-]{6,})")
+
+
+def _seller(it) -> tuple[str, str]:
+    """(код, имя) продавца из карточки выдачи. У частных продавцов без рейтинга блока нет — вернётся ('', '')."""
+    sid = ""
+    for a in it.select('a[href*="/brands/"], a[href*="/user/"]'):
+        m = _SELLER_HREF_RE.search(a.get("href", ""))
+        if m:
+            sid = m.group(1)
+            break
+    anchor = it.select_one('[data-marker="seller-rating"]') or it.select_one('[data-marker="seller-info/score"]')
+    p = anchor.find_previous("p") if anchor else None
+    name = p.get_text(" ", strip=True) if p is not None and it in p.parents and not p.get("data-marker") else ""
+    return sid, name[:80]
+
+
 def parse_search_html(html: str) -> list[RawListing]:
     soup = BeautifulSoup(html, "html.parser")
     out: list[RawListing] = []
@@ -114,6 +133,7 @@ def parse_search_html(html: str) -> list[RawListing]:
         ce = (it.select_one('[data-marker="item-location"]') or it.select_one('[data-marker="item-address"]')
               or it.select_one('[class*="geo-root"]'))
         rating = _text(it, '[data-marker="seller-rating/score"]').replace(",", ".")
+        seller_id, seller_name = _seller(it)
         reviews = _digits(_text(it, '[data-marker="seller-info/summary"]'))
         out.append(RawListing(
             id=str(iid), title=title, price=price, url=url,
@@ -124,6 +144,7 @@ def parse_search_html(html: str) -> list[RawListing]:
             date_text=_text(it, '[data-marker="item-date"]'),
             rating=float(rating) if re.fullmatch(r"\d(\.\d+)?", rating) else None,
             reviews=int(reviews) if reviews else None,
+            seller_id=seller_id, seller_name=seller_name,
         ))
     return out
 
@@ -149,8 +170,41 @@ def parse_listing_page(status: int, html: str) -> dict:
     cond = _CONDITION_RE.search(soup.get_text(" ", strip=True))
     # в общероссийской выдаче города нет — он есть только в заголовке карточки: «… купить в Зеленодольске …»
     city = _TITLE_CITY_RE.search(soup.title.get_text(" ", strip=True)) if soup.title else None
-    return {"state": "active", "description": de.get_text(" ", strip=True) if de else "",
-            "condition": cond.group(1) if cond else "", "city": f"в {city.group(1)}" if city else ""}
+    out = {"state": "active", "description": de.get_text(" ", strip=True) if de else "",
+           "condition": cond.group(1) if cond else "", "city": f"в {city.group(1)}" if city else ""}
+    out.update(_card_details(soup))
+    return out
+
+
+def _card_details(soup) -> dict:
+    """Глубокая карточка: фото, продавец, характеристики. Чего на странице нет — того и в ответе нет."""
+    d: dict = {}
+    gal = soup.select_one('[data-marker="item-view/main-gallery"]') or soup.select_one('[data-marker="item-view/gallery"]')
+    photos: list[str] = []
+    for img in (gal.select("img") if gal else []):
+        src = img.get("src") or ""
+        if src.startswith("https://") and src not in photos:
+            photos.append(src)
+    if photos:
+        d["photos"] = photos[:12]
+    name = soup.select_one('[data-marker="seller-info/name"]')
+    if name:
+        d["seller_name"] = name.get_text(" ", strip=True)[:80]
+    label = soup.select_one('[data-marker="seller-info/label"]')
+    if label:
+        d["seller_type"] = label.get_text(" ", strip=True)[:40]
+    rate = soup.select_one('[data-marker="sellerRate"] meta[itemprop="ratingValue"]')
+    if rate and re.fullmatch(r"\d(\.\d+)?", rate.get("content", "")):
+        d["rating"] = float(rate["content"])
+    params = soup.select_one('[data-marker="item-view/item-params"]')
+    if params:
+        text = params.get_text(" ", strip=True)
+        brand = re.search(r"Бренд\s*:\s*([^:]+?)(?=\s+[А-ЯЁ][а-яё ]+\s*:|$)", text)
+        model = re.search(r"Модель\s*:\s*([^:]+?)(?=\s+[А-ЯЁ][а-яё ]+\s*:|$)", text)
+        am = " ".join(x.group(1).strip() for x in (brand, model) if x)
+        if am:
+            d["avito_model"] = am[:120]
+    return d
 
 
 def is_blocked(status: int, html: str) -> bool:
@@ -191,6 +245,8 @@ class AvitoCollector:
         self.delay, self.max_pages, self._sleep = delay, max_pages, sleep
         self.last_status, self.last_html = 0, ""   # для диагностики (probe)
         self.captchas = 0             # сколько раз за сеанс Авито просил капчу
+        self.requests = 0             # сколько страниц загружено за сеанс
+        self.limiter = None           # schedule.RateLimiter: потолок загрузок в час
         self.on_captcha = None        # callback(): приложение показывает уведомление
         self._pw = self._ctx = self._page = None
 
@@ -217,6 +273,12 @@ class AvitoCollector:
                 pass
         self._pw = self._ctx = self._page = None
 
+    def _count(self) -> None:
+        """Перед каждой загрузкой: учесть запрос и, если упёрлись в часовой лимит, подождать."""
+        if self.limiter is not None:
+            self.limiter.acquire()
+        self.requests += 1
+
     def _snapshot(self) -> bool:
         """Обновляет last_html; True, если на странице есть объявления."""
         for _ in range(8):
@@ -239,6 +301,7 @@ class AvitoCollector:
         try:
             if not self._page:
                 self._start()
+            self._count()
             resp = self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:
             raise FetchError(f"{type(e).__name__}: {str(e).splitlines()[0][:200]}") from e
@@ -278,6 +341,7 @@ class AvitoCollector:
         try:
             if not self._page:
                 self._start()
+            self._count()
             resp = self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
             self._page.wait_for_timeout(2500)
             html = self._page.content()

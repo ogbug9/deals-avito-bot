@@ -19,6 +19,7 @@ class Part:
     unit: str = ""            # «₽/ГБ», «₽/Вт»
     brand: str = ""
     detail: dict = field(default_factory=dict)
+    fine_key: str = ""        # точная позиция (с брендом/частотой); используется, когда в ней хватает объявлений
 
 
 def _low(*texts: str) -> str:
@@ -86,7 +87,10 @@ def parse_ram(title: str, description: str = "") -> Part | None:
     freq = int(f.group(1)) if f else None
     ecc = bool(_ECC_RE.search(full))
     key = f"RAM DDR{ddr} {total}GB" + _ram_tier(ddr, freq) + (" ECC" if ecc else "") + (" SODIMM" if form == "SODIMM" else "")
-    return Part("ram", key, qty=float(total), unit="₽/ГБ", brand=_brand(full, _RAM_BRANDS),
+    brand = _brand(full, _RAM_BRANDS)
+    fine = f"RAM DDR{ddr} {total}GB {freq} {brand.title()}" + (" ECC" if ecc else "") + \
+           (" SODIMM" if form == "SODIMM" else "") if brand and freq else ""
+    return Part("ram", key, qty=float(total), unit="₽/ГБ", brand=brand, fine_key=fine,
                 detail={"ddr": ddr, "gb": total, "sticks": sticks, "kit": sticks > 1, "freq": freq, "form": form,
                         "ecc": ecc})
 
@@ -171,8 +175,9 @@ def parse_psu(title: str, description: str = "") -> Part | None:
     watts = min(PSU_WATTS, key=lambda w: abs(w - watts))
     brand = _brand(full, _PSU_BRANDS)
     tier = " (бренд A)" if brand in _PSU_TIER_A else ""      # Seasonic за 650 Вт и безымянный — разные рынки
+    fine = f"PSU {watts}W" + (f" {cert}" if cert else "") + f" {brand.title()}" if brand else ""
     return Part("psu", f"PSU {watts}W" + (f" {cert}" if cert else "") + tier, qty=float(watts), unit="₽/Вт",
-                brand=brand, detail={"watts": watts, "cert": cert or None})
+                brand=brand, fine_key=fine, detail={"watts": watts, "cert": cert or None})
 
 
 # ---------------------------------------------------------------- диски
@@ -218,12 +223,44 @@ def parse_disk(title: str, description: str = "") -> Part | None:
     else:
         form = '2.5"' if re.search(r"2[.,]5|ноутбук", full) else '3.5"'
         key = f"HDD {size} {form}"
-    return Part("ssd" if is_ssd else "hdd", key, qty=float(cap), unit="₽/ГБ", brand=_brand(full, _DISK_BRANDS),
-                detail={"gb": cap})
+    brand = _brand(full, _DISK_BRANDS)
+    return Part("ssd" if is_ssd else "hdd", key, qty=float(cap), unit="₽/ГБ", brand=brand,
+                fine_key=f"{key} {brand.title()}" if brand else "", detail={"gb": cap})
 
 
 # ---------------------------------------------------------------- материнские платы (для разбора ПК)
+_CHIPSET_FULL_RE = re.compile(r"(?<![a-z0-9])([abhxzq]\d{2,3})(m|i|e)?(?![0-9])")
 _CHIPSET_RE = re.compile(r"(?<![a-z0-9])([abhxzq]\d{2,3})(?:m|i|e)?(?![0-9])")
+_SOCKETS = {
+    "AM4": ("a320", "a520", "b350", "b450", "b550", "x370", "x470", "x570"),
+    "AM5": ("a620", "b650", "b850", "x670", "x870"),
+    "LGA1155": ("h61", "b75", "z77"), "LGA1150": ("h81", "b85", "h97", "z87", "z97"),
+    "LGA1151": ("h110", "b150", "h170", "z170", "b250", "h270", "z270", "h310", "b360", "b365", "h370", "z370", "z390"),
+    "LGA1200": ("h410", "b460", "h470", "z490", "h510", "b560", "h570", "z590"),
+    "LGA1700": ("h610", "b660", "h670", "z690", "b760", "h770", "z790"),
+    "LGA1851": ("h810", "b860", "z890"),
+    "LGA2011": ("x79",), "LGA2011-3": ("x99",), "LGA2066": ("x299",),
+}
+SOCKET_BY_CHIPSET = {c: sock for sock, chips in _SOCKETS.items() for c in chips}
+_MB_BRANDS = ("asus", "msi", "gigabyte", "asrock", "biostar", "maxsun", "colorful", "huananzhi", "machinist", "esonic",
+              "afox", "supermicro", "intel")
+
+
+def mb_position(text: str) -> tuple[str, str] | None:
+    """(ключ «MB сокет чипсет форм-фактор», чипсет) или None, если чипсет не один."""
+    hits = {(c, suf) for c, suf in _CHIPSET_FULL_RE.findall(text) if c in _CHIPSETS}
+    chips = {c for c, _ in hits}
+    if len(chips) != 1:
+        return None
+    chip = next(iter(chips))
+    suffixes = {suf for _, suf in hits}
+    if re.search(r"mini[\s\-]?itx|\bitx\b|-itx", text) or "i" in suffixes:
+        form = "ITX"
+    elif re.search(r"micro[\s\-]?atx|m-?atx|\bmatx\b", text) or "m" in suffixes:
+        form = "mATX"
+    else:
+        form = "ATX"
+    return f"MB {SOCKET_BY_CHIPSET.get(chip, '?')} {chip.upper()} {form}", chip
 _CHIPSETS = {"a320", "a520", "a620", "b350", "b450", "b550", "b650", "b850", "x370", "x470", "x570", "x670", "x870",
              "h61", "h81", "h97", "h110", "h170", "h270", "h310", "h370", "h410", "h470", "h510", "h570", "h610", "h670",
              "h770", "h810", "b75", "b85", "b150", "b250", "b360", "b365", "b460", "b560", "b660", "b760", "b860",
@@ -234,10 +271,11 @@ def parse_mb(title: str, description: str = "") -> Part | None:
     t = _low(title)
     if re.search(r"комплект|связк|набор|\+\s*(?:проц|озу|памят|cpu)|с процессор", t):
         return None
-    found = {c for c in _CHIPSET_RE.findall(t) if c in _CHIPSETS} or {c for c in _CHIPSET_RE.findall(_low(description)) if c in _CHIPSETS}
-    if len(found) != 1:
+    pos = mb_position(t) or mb_position(_low(title, description))
+    if not pos:
         return None
-    return Part("mb", f"MB {next(iter(found)).upper()}")
+    brand = _brand(_low(title, description), _MB_BRANDS)
+    return Part("mb", pos[0], brand=brand, fine_key=f"{pos[0]} {brand.title()}" if brand else "", detail={"chipset": pos[1]})
 
 
 PARSERS = {
@@ -307,8 +345,8 @@ def parse_pc(title: str, description: str = "") -> Bundle:
     if "ram" not in b.absent:
         ram = _pc_ram(full)
         b.parts.append(ram) if ram else b.unknown.append("ram")
-    chips = {c for c in _CHIPSET_RE.findall(full) if c in _CHIPSETS}
-    b.parts.append(Part("mb", f"MB {next(iter(chips)).upper()}")) if len(chips) == 1 else b.unknown.append("mb")
+    mb = mb_position(full)
+    b.parts.append(Part("mb", mb[0])) if mb else b.unknown.append("mb")
     if "psu" not in b.absent:
         psu = _pc_psu(full)
         b.parts.append(psu) if psu else b.unknown.append("psu")

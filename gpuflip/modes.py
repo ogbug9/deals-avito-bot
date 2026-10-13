@@ -125,7 +125,7 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
 
     source = row["model_source"] or "title"
     below_median = ms.median_ask > 0 and row["price"] < ms.median_ask
-    base = f"{key}: {fmt_rub(row['price'])} при рынке {_market_note(ms)}"
+    base = f"{ms.key or key}: {fmt_rub(row['price'])} при рынке {_market_note(ms)}"
 
     # --- классика / 5. комплектующие / 3. плохое описание: одна формула, разные условия допуска ---
     mode = "market" if is_gpu else "categories"
@@ -134,9 +134,7 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
     kind = key.split(" ")[0]
     if enabled(cfg, mode):
         log.view(mode)
-        if kind == "MB":
-            log.reject(mode, "position_too_coarse")   # чипсет ≠ модель платы: позиция годится только для оценки ПК
-        elif not sc.ok:
+        if not sc.ok:
             log.reject(mode, sc.reason)
         elif mode == "badtext" and source == "fuzzy" and row["price"] > ms.median_ask * cfg.fuzzy_max_ratio:
             log.reject(mode, "fuzzy_price_above_60pct")
@@ -145,8 +143,11 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
             conf = {"title": "high", "description": "medium", "fuzzy": "low"}[source]
             unit = f", {row['unit_price']:.0f} {_unit(row)}" if row["unit_price"] else ""
             coarse = ""
-            if kind in ("RAM", "PSU", "SSD", "HDD"):      # позиция не различает модель — человек должен сверить
-                conf, coarse = "medium", "; позиция без учёта модели — сверьте вручную"
+            if kind in ("RAM", "PSU", "SSD", "HDD", "MB") and not sc.precise:
+                # общая позиция не различает бренд и модель — человек должен сверить; при точной позиции доверие высокое
+                conf, coarse = "medium", "; позиция без учёта бренда — сверьте вручную"
+            if row["reseller"]:
+                coarse += "; у продавца много одинаковых лотов"
             reason = (f"{how[source]} — " if mode == "badtext" else "") + \
                      f"{base}{unit}; торг до {fmt_rub(sc.target_buy)}{coarse}{_risk_note(flags)}"
             out.append(Cand(mode, sc.net, sc.net_pct, reason, conf))
@@ -281,8 +282,12 @@ def format_alert(row, cands: list[Cand]) -> str:
     e = html.escape
     best = max(cands, key=lambda c: c.est_profit)
     tags = ", ".join(MODE_TITLES[c.mode] for c in cands)
-    lines = [f"🔥 <b>{e(row['item_key'] or row['title'][:60])}</b> — {fmt_rub(row['price'])}", e(row["title"][:120]),
-             f"Режим: {tags}"]
+    lines = [f"🔥 <b>{e(row['item_key'] or row['title'][:60])}</b> — {fmt_rub(row['price'])}", e(row["title"][:120])]
+    sc = json.loads(row["score_json"]) if row["score_json"] else None
+    if sc and sc.get("market_n"):
+        lines.append(f"Рынок: {fmt_rub(sc['median_ask'])}, n={sc['market_n']}"
+                     + (f", скидка {sc['discount_vs_market']:.0%}" if sc.get("discount_vs_market") else ""))
+    lines.append(f"Режим: {tags}")
     lines += [f"• {e(c.reason)}" for c in cands]
     lines.append(f"Чистыми ≈ <b>+{fmt_rub(best.est_profit)}</b> ({best.est_profit_pct:.0%}), доверие: {CONFIDENCE_RU[best.confidence]}")
     if row["url"]:

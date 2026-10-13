@@ -25,6 +25,10 @@ class Score:
     median_ask: float = 0.0
     flags: list[str] = field(default_factory=list)
     low_data: bool = False            # рынок 6–9 объявлений: оценка есть, алерта нет
+    position: str = ""                # по какой позиции считался рынок
+    precise: bool = False             # True — по точной позиции (с брендом/частотой)
+    days_real: bool = False           # срок продажи посчитан по ушедшим лотам, а не взят условным
+    days_n: int = 0                   # по скольким ушедшим
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -40,7 +44,7 @@ def _net(buy: float, sell_price: float, days: float, risk_p: float, cfg: Config)
 
 def score_listing(price: float, flags: dict[str, float], stats: MarketStats, cfg: Config) -> Score:
     s = Score(ok=False, reason="", ask=price, flags=sorted(flags), market_n=stats.n, median_ask=stats.median_ask,
-              low_data=stats.n < cfg.alert_market_n)
+              low_data=stats.n < cfg.alert_market_n, position=stats.key)
 
     if not price or price <= 0:
         s.reason = "no_price"
@@ -60,6 +64,7 @@ def score_listing(price: float, flags: dict[str, float], stats: MarketStats, cfg
     else:
         s.sell_price = stats.median_ask * cfg.ask_to_sale
     s.days_to_sell = stats.days_to_sell or cfg.default_days_to_sell
+    s.days_real, s.days_n = stats.days_to_sell is not None, stats.lived_n
     s.discount_vs_market = (stats.median_ask - price) / stats.median_ask
 
     if price < stats.median_ask * cfg.scam_price_ratio:

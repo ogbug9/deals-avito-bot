@@ -22,6 +22,22 @@ def _read_env_file(path: str) -> dict[str, str]:
     return out
 
 
+def set_env(path: str, values: dict[str, str]) -> None:
+    """Записать настройки в .env, не трогая остальные строки и комментарии. Пустое значение очищает ключ."""
+    p = Path(path)
+    lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    left = {k: str(v).replace("\n", " ").strip() for k, v in values.items()}
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if key in left:
+            out.append(f"{key}={left.pop(key)}")
+        else:
+            out.append(line)
+    out += [f"{k}={v}" for k, v in left.items()]
+    p.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 @dataclass
 class Config:
     # Telegram
@@ -66,6 +82,15 @@ class Config:
     bundle_min_markup: float = 0.25      # ПК: сумма деталей должна быть выше цены лота минимум на столько
     bundle_days: float = 14.0            # разборка и продажа по частям
     recheck_per_cycle: int = 3           # сколько карточек перепроверять за обход (кандидаты + случайные)
+    deep_per_cycle: int = 3              # сколько карточек читать целиком за обход (прошедшие предфильтр по цене)
+    deep_discount: float = 0.10          # предфильтр: цена ниже медианы минимум на столько
+    reseller_penalty: float = 0.10       # штраф риска продавцу с множеством одинаковых лотов
+    # Лёгкий цикл и защита от блокировок
+    light_cycle: bool = True             # раз в несколько минут смотреть 1-ю страницу приоритетных источников
+    light_min_sec: float = 180.0
+    light_max_sec: float = 300.0
+    full_interval_sec: float = 3600.0    # полный обход всех источников
+    max_requests_per_hour: int = 45      # потолок загрузок страниц Авито в час (выдача + карточки)
     max_days_to_sell: float = 21.0
     scam_price_ratio: float = 0.45       # цена ниже этой доли рынка — подозрение на развод
     max_alerts_per_scan: int = 10
@@ -93,6 +118,8 @@ class Config:
             v = env.get(f"MODE_{name.upper()}")
             if v not in (None, ""):
                 setattr(c, f"mode_{name}", v.strip().lower() in ("1", "true", "yes", "on"))
+        if env.get("LIGHT_CYCLE") not in (None, ""):
+            c.light_cycle = env["LIGHT_CYCLE"].strip().lower() in ("1", "true", "yes", "on")
         for name, attr, cast in [
             ("DELAY_SEC", "delay_sec", float), ("MAX_PAGES", "max_pages", int),
             ("CAPTCHA_WAIT", "captcha_wait", float),
@@ -106,6 +133,9 @@ class Config:
             ("MAX_ALERTS_PER_SCAN", "max_alerts_per_scan", int),
             ("ALERT_MARKET_N", "alert_market_n", int), ("REGION_MAX_PAGES", "region_max_pages", int),
             ("DELIVERY_COST", "delivery_cost", float), ("RECHECK_PER_CYCLE", "recheck_per_cycle", int),
+            ("DEEP_PER_CYCLE", "deep_per_cycle", int), ("LIGHT_MIN_SEC", "light_min_sec", float),
+            ("LIGHT_MAX_SEC", "light_max_sec", float), ("FULL_INTERVAL_SEC", "full_interval_sec", float),
+            ("MAX_REQUESTS_PER_HOUR", "max_requests_per_hour", int),
         ]:
             f(name, attr, cast)
         return c

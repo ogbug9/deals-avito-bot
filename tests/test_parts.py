@@ -81,7 +81,11 @@ def test_disk_rejects_accessories():
 
 
 def test_mb():
-    assert parse_mb("Материнская плата Gigabyte B550M Aorus Elite").key == "MB B550"
+    p = parse_mb("Материнская плата Gigabyte B550M Aorus Elite")
+    assert p.key == "MB AM4 B550 mATX" and p.fine_key == "MB AM4 B550 mATX Gigabyte"
+    assert parse_mb("ASRock B550M-ITX/AC").key == "MB AM4 B550 ITX"
+    assert parse_mb("Asus TUF B850-Plus WiFi").key == "MB AM5 B850 ATX"
+    assert parse_mb("MSI PRO H610M-E").key == "MB LGA1700 H610 mATX"
     assert parse_mb("Комплект B450 + Ryzen 5 3600") is None
 
 
@@ -93,7 +97,7 @@ def test_pc_bundle_from_real_listing():
     b = parse_pc("Компьютер i5-2500 / RX 570 4 гб / 16 гб озу / SSD",
                  "Процессор: Intel Core i5-2500. Видеокарта: Gigabyte Radeon RX 570, 4 ГБ GDDR5. "
                  "Оперативная память: 16 ГБ DDR3. SSD 240 гб. Блок питания 500W. Материнская плата H61")
-    assert keys(b) == ["CPU i5-2500", "MB H61", "PSU 500W", "RAM DDR3 16GB", "RX 570 4GB", "SSD 256GB SATA"]
+    assert keys(b) == ["CPU i5-2500", "MB LGA1155 H61 ATX", "PSU 500W", "RAM DDR3 16GB", "RX 570 4GB", "SSD 256GB SATA"]
     assert b.unknown == ["case"] and not b.reject
 
 

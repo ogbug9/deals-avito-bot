@@ -14,100 +14,16 @@ from urllib.parse import parse_qs, urlparse
 
 from . import db, modes, sources
 from .paths import home, package_dir
+from .query import FILTER_LABELS, SORTS, USER_STATUSES, _int, build_query, order_by
 
 HTML_PATH = package_dir() / "ui.html"
 SCAN_LOG = "scan.log"
 MIN_SCAN_GAP = 600          # не чаще раза в 10 минут: частые обходы = капча Авито
-SORTS = {
-    "date": "COALESCE(posted_at, first_seen) DESC",
-    "profit": "est_profit IS NULL, est_profit DESC",
-    "pct": "json_extract(score_json, '$.discount_vs_market') IS NULL, json_extract(score_json, '$.discount_vs_market') DESC",
-    "price_asc": "price ASC",
-    "price_desc": "price DESC",
-    "rating": "rating IS NULL, rating DESC, reviews DESC",
-}
-USER_STATUSES = ("new", "checked", "bought", "skipped")
 FIELDS = ("id, url, title, description, city, price, first_price, category, region, delivery, image, date_text, "
-          "posted_at, first_seen, last_seen, rating, reviews, defect, wanted, gpu_key, item_key, unit_price, qty, flags, "
-          "net_profit, score_json, status, mode_tags, est_profit, est_profit_pct, reason, confidence, model_source, "
-          "urgent, is_msk, avito_condition, fav, user_status, note")
-# подписи фильтров — для подсказки «какой фильтр обнулил выдачу»
-FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория", "pmin": "цена от", "pmax": "цена до", "region": "регион",
-                 "city": "город или метро", "delivery": "только с доставкой", "rating": "рейтинг продавца",
-                 "age": "свежесть", "model": "модель или позиция", "profit": "только кандидаты", "mode": "режим поиска",
-                 "fav": "только избранное", "ustatus": "мой статус", "conf": "доверие"}
-
-
-def _int(q: dict, name: str, default: int = 0) -> int:
-    try:
-        return int(float(q.get(name, [""])[0] or default))
-    except ValueError:
-        return default
-
-
-def build_query(q: dict) -> tuple[str, list]:
-    """Параметры запроса → (WHERE, аргументы). q — как из parse_qs."""
-    one = lambda k: (q.get(k, [""])[0] or "").strip()
-    where, args = ["1=1"], []
-    if one("status") != "all":
-        where.append("status='active'")
-    cats = [c for c in one("cat").split(",") if c in sources.CATEGORIES]
-    if cats:
-        where.append(f"category IN ({','.join('?' * len(cats))})")
-        args += cats
-    if one("region") == "msk":
-        where.append("is_msk=1")
-    elif one("region") == "regions":
-        where.append("is_msk=0")
-    elif one("region"):
-        where.append("region=?")
-        args.append(one("region"))
-    if _int(q, "pmin"):
-        where.append("price>=?")
-        args.append(_int(q, "pmin"))
-    if _int(q, "pmax"):
-        where.append("price<=?")
-        args.append(_int(q, "pmax"))
-    if one("delivery") == "1":
-        where.append("delivery=1")
-    if one("defect") != "show":            # по умолчанию брак скрыт
-        where.append("defect=0")
-    if one("wanted") != "show":
-        where.append("wanted=0")
-    if one("model"):
-        where.append("item_key=?")
-        args.append(one("model"))
-    if one("profit") == "1":
-        where.append("mode_tags IS NOT NULL AND mode_tags<>'manual'")
-    if one("mode") in modes.MODE_TITLES:
-        where.append("(',' || mode_tags || ',') LIKE ?")
-        args.append(f"%,{one('mode')},%")
-    if one("conf") in modes.CONFIDENCE_RU:
-        where.append("confidence=?")
-        args.append(one("conf"))
-    if one("fav") == "1":
-        where.append("fav=1")
-    if one("ustatus") == "none":
-        where.append("user_status IS NULL")
-    elif one("ustatus") in USER_STATUSES:
-        where.append("user_status=?")
-        args.append(one("ustatus"))
-    if one("rating"):
-        try:
-            args.append(float(one("rating")))
-            where.append("rating>=?")
-        except ValueError:
-            pass
-    if _int(q, "age"):
-        where.append("COALESCE(posted_at, first_seen)>=?")
-        args.append(time.time() - _int(q, "age") * 86400)
-    if one("city"):
-        where.append("lc(city) LIKE ?")
-        args.append(f"%{one('city').lower()}%")
-    for word in one("q").lower().split()[:8]:
-        where.append("lc(title || ' ' || COALESCE(description, '')) LIKE ?")
-        args.append(f"%{word}%")
-    return " AND ".join(where), args
+          "posted_at, first_seen, last_seen, rating, reviews, defect, wanted, gpu_key, item_key, fine_key, unit_price, qty, "
+          "flags, net_profit, score_json, status, mode_tags, est_profit, est_profit_pct, reason, confidence, model_source, "
+          "urgent, is_msk, avito_condition, fav, user_status, note, seller_id, seller_name, seller_type, seller_ads, "
+          "reseller, photos, deep_at, avito_model, checklist, brand, gone_at, checked_at")
 
 
 def _row(r) -> dict:
@@ -128,9 +44,7 @@ class App:
         self.scan_started = 0.0
 
     def conn(self):
-        c = db.connect(self.db_path)
-        c.create_function("lc", 1, lambda s: (s or "").lower())   # LIKE в SQLite не умеет регистр кириллицы
-        return c
+        return db.connect(self.db_path)
 
     # ---------------- объявления ----------------
     def listings(self, q: dict) -> dict:

@@ -32,6 +32,7 @@ def format_alert(title: str, key: str, url: str, sc, flags_info: list[str]) -> s
 class Notifier:
     def __init__(self, token: str = "", chat_id: str = "", out=print, session=None):
         self.token, self.chat_id, self.out = token, chat_id, out
+        self.last_error = ""
         self.s = session or requests
 
     @property
@@ -42,10 +43,35 @@ class Notifier:
         if not self.enabled:
             self.out("[dry-run Telegram]\n" + text + "\n")
             return True
-        r = self.s.post(
-            f"https://api.telegram.org/bot{self.token}/sendMessage",
-            json={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": False},
-            timeout=20,
-        )
-        return r.status_code == 200
+        return self._post(text)[0]
+
+    def _post(self, text: str) -> tuple[bool, str]:
+        """(успех, пояснение). Ошибку Telegram возвращаем словами — её показывает кнопка «Тест»."""
+        try:
+            r = self.s.post(
+                f"https://api.telegram.org/bot{self.token}/sendMessage",
+                json={"chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
+                      "disable_web_page_preview": False},
+                timeout=20,
+            )
+        except Exception as e:
+            self.last_error = f"нет связи с Telegram: {type(e).__name__}"
+            return False, self.last_error
+        if r.status_code == 200:
+            self.last_error = ""
+            return True, "отправлено"
+        try:
+            desc = r.json().get("description", "")
+        except Exception:
+            desc = ""
+        hint = {401: "неверный токен бота", 400: "неверный chat id или бот не добавлен в чат",
+                403: "бот заблокирован или вы не нажали Start в чате с ботом", 404: "неверный токен бота"}.get(r.status_code, "")
+        self.last_error = f"Telegram ответил {r.status_code}" + (f": {hint}" if hint else "") + (f" ({desc})" if desc else "")
+        return False, self.last_error
+
+    def test(self) -> tuple[bool, str]:
+        if not self.token:
+            return False, "не задан токен бота"
+        if not self.chat_id:
+            return False, "не задан chat id"
+        return self._post("✅ gpuflip: тестовое сообщение. Алерты о кандидатах будут приходить сюда.")

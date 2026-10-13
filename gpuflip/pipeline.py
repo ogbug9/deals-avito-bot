@@ -61,13 +61,20 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
     log = modes.ModeLog()
     found = []
     keys = set()
+    hidden = db.excluded(conn)
     for l in listings:
+        _mark_reseller(conn, cfg, l.id)
         row = conn.execute("SELECT * FROM listings WHERE id=?", (l.id,)).fetchone()
         sc = ms = None
         if row["item_key"]:
             keys.add(row["item_key"])
             ms = db.market_stats(conn, row["item_key"], l.id, now)
+            if row["fine_key"]:           # точная позиция (с брендом) — если в ней хватает объявлений для алерта
+                fine = db.market_stats(conn, row["fine_key"], l.id, now, column="fine_key")
+                if fine.n >= cfg.alert_market_n:
+                    ms = fine
             sc = score_listing(l.price, json.loads(row["flags"] or "{}"), ms, cfg)
+            sc.precise = ms.key == row["fine_key"]
             stats["scored"] += 1
             db.save_score(conn, l.id, sc.net if sc.ok else None, json.dumps(sc.to_dict(), ensure_ascii=False))
         else:
@@ -77,7 +84,8 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
             log.hit(c.mode)
         modes.store(conn, row, cands, now)
         alertable = [c for c in cands if c.mode in modes.ALERT_MODES]
-        if alertable:
+        muted = (row["seller_id"] and row["seller_id"] in hidden["seller"]) or (row["item_key"] in hidden["model"])
+        if alertable and not muted:       # скрытые продавцы и модели в алерты не идут
             found.append((max(c.est_profit for c in alertable), row, alertable))
     stats["candidates"] = len(found)
     stats["modes"] = log.summary()
@@ -94,12 +102,60 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
         if prev and row["price"] > prev["price"] * (1 - cfg.realert_drop_pct):
             continue
         if notifier:
-            notifier.send(modes.format_alert(row, cands))
+            fresh = conn.execute("SELECT * FROM listings WHERE id=?", (row["id"],)).fetchone()   # уже с оценкой рынка
+            notifier.send(modes.format_alert(fresh, cands))
         if notifier or record_alerts:
             db.record_alert(conn, row["id"], row["price"], net, now)
             stats["alerts"] += 1
+    _notify_saved_searches(conn, [l.id for l in listings], now, notifier)
     conn.commit()
     return stats
+
+
+def _mark_reseller(conn, cfg: Config, lid: str) -> None:
+    """Продавец с несколькими одинаковыми лотами (или дубли объявления) — флаг и штраф риска."""
+    r = conn.execute("SELECT seller_id, item_key, title, description, price, flags, reseller FROM listings WHERE id=?",
+                     (lid,)).fetchone()
+    same = total = 0
+    if r["seller_id"]:
+        total = conn.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND seller_id=?", (r["seller_id"],)).fetchone()[0]
+        if r["item_key"]:
+            same = conn.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND seller_id=? AND item_key=?",
+                                (r["seller_id"], r["item_key"])).fetchone()[0]
+    dups = 0
+    if len(r["description"] or "") >= 20:      # дубли: тот же заголовок, цена и текст (одного заголовка мало — он бывает типовым)
+        dups = conn.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND title=? AND price=? AND description=?",
+                            (r["title"], r["price"], r["description"])).fetchone()[0]
+    reseller = int(same >= 3 or total >= 8 or dups >= 3)
+    flags = json.loads(r["flags"] or "{}")
+    if reseller:
+        flags["reseller"] = cfg.reseller_penalty
+    else:
+        flags.pop("reseller", None)
+    conn.execute("UPDATE listings SET reseller=?, seller_ads=?, flags=? WHERE id=?",
+                 (reseller, total or None, json.dumps(flags), lid))
+
+
+def _notify_saved_searches(conn, ids: list[str], now: float, notifier) -> None:
+    """Сохранённые поиски с уведомлением: сообщить о новых объявлениях, которые под них подходят."""
+    if not notifier or not ids:
+        return
+    from .query import build_query
+    from urllib.parse import parse_qs
+    fresh = [i for i in ids if conn.execute("SELECT first_seen FROM listings WHERE id=?", (i,)).fetchone()[0] == now]
+    if not fresh:
+        return
+    for s in conn.execute("SELECT id, name, query FROM saved_searches WHERE notify=1").fetchall():
+        where, args = build_query(parse_qs(s["query"] or ""), conn)
+        marks = ",".join("?" * len(fresh))
+        rows = conn.execute(f"SELECT title, price, url FROM listings WHERE {where} AND id IN ({marks}) ORDER BY price LIMIT 5",
+                            args + fresh).fetchall()
+        if rows:
+            lines = [f"🔎 Сохранённый поиск «{s['name']}»: новых {len(rows)}"]
+            lines += [f"• {r['title'][:70]} — {r['price']:,.0f} ₽".replace(",", " ") for r in rows]
+            lines.append(rows[0]["url"] or "")
+            notifier.send("\n".join(lines))
+            conn.execute("UPDATE saved_searches SET notified_at=? WHERE id=?", (now, s["id"]))
 
 
 def rescore(conn, cfg: Config, now: float | None = None) -> dict:
@@ -114,7 +170,8 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
     for r in conn.execute("SELECT * FROM listings WHERE status='active'"):
         l = RawListing(id=r["id"], title=r["title"] or "", price=r["price"] or 0.0, url=r["url"] or "",
                        description=r["description"] or "", city=r["city"] or "", delivery=bool(r["delivery"]),
-                       image=r["image"] or "", rating=r["rating"], reviews=r["reviews"])
+                       image=r["image"] or "", rating=r["rating"], reviews=r["reviews"],
+                       seller_id=r["seller_id"] or "", seller_name=r["seller_name"] or "")
         groups.setdefault((r["source"], r["category"], r["region"]), []).append(l)
     total = {"listings": 0, "positions": 0, "candidates": 0, "modes": {}}
     for final in (False, True):
@@ -154,46 +211,103 @@ def _save_market_history(conn, keys: set[str], now: float) -> None:
                          (day, key, statistics.median(prices), len(prices)))
 
 
-def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | None = None) -> dict:
-    """Перепроверка карточек: кандидаты (давно не проверенные) и одна случайная из остальных.
+def deep_targets(conn, cfg: Config, now: float, limit: int) -> list:
+    """Кого читать целиком: лоты, прошедшие предфильтр по цене (заметно ниже медианы позиции, в бюджете), и
+    системные блоки в бюджете (в выдаче их описание обрезано). Уже прочитанные не трогаем, пока цена не изменилась."""
+    if limit <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT l.id, l.url FROM listings l WHERE l.status='active' AND l.url<>'' AND l.defect=0 AND l.wanted=0 "
+        "AND l.price BETWEEN ? AND ? AND (l.deep_at IS NULL OR EXISTS("
+        "  SELECT 1 FROM price_history h WHERE h.listing_id=l.id AND h.ts>l.deep_at)) AND ("
+        "  (json_extract(l.score_json, '$.market_n')>=? AND l.price<=json_extract(l.score_json, '$.median_ask')*?)"
+        "  OR l.kind='pc') "
+        "ORDER BY (l.mode_tags IS NULL), COALESCE(json_extract(l.score_json, '$.discount_vs_market'), 0) DESC, l.first_seen DESC "
+        "LIMIT ?",
+        (cfg.min_price, cfg.max_price, cfg.min_market_n, 1 - cfg.deep_discount, limit)).fetchall()
+    return list(rows)
 
-    check(url) → {"state": "active" | "inactive" | "unknown", "description": str, "condition": str}.
-    Пропавшие объявления становятся inactive и выходят из медианы.
+
+def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | None = None,
+            deep_limit: int | None = None, notifier: Notifier | None = None) -> dict:
+    """Открывает карточки: (1) глубокое чтение лотов, прошедших предфильтр, (2) перепроверка кандидатов,
+    (3) одна случайная из остальных — для оценки срока жизни объявлений.
+
+    check(url) → {"state": "active" | "inactive" | "unknown", "description", "condition", "city", "photos", …}.
+    Пропавшие объявления становятся inactive и выходят из медианы. Прочитанное кэшируется (deep_at).
     """
     now = time.time() if now is None else now
     limit = cfg.recheck_per_cycle if limit is None else limit
-    out = {"checked": 0, "inactive": 0, "unknown": 0}
-    if limit <= 0:
-        return out
-    rows = conn.execute(
-        "SELECT DISTINCT l.id, l.url FROM listings l JOIN candidates c ON c.listing_id=l.id "
-        "WHERE l.status='active' AND l.url<>'' AND COALESCE(l.checked_at,0)<? ORDER BY COALESCE(l.checked_at,0), c.est_profit DESC LIMIT ?",
-        (now - 6 * 3600, max(1, limit - 1))).fetchall()
-    others = conn.execute(
-        "SELECT id, url FROM listings WHERE status='active' AND url<>'' AND item_key IS NOT NULL AND last_seen<? "
-        "AND COALESCE(checked_at,0)<? AND id NOT IN (SELECT listing_id FROM candidates)",
-        (now - 2 * 86400, now - 2 * 86400)).fetchall()
-    rows = list(rows) + (random.sample(others, 1) if others and len(rows) < limit else [])
-    for r in rows[:limit]:
-        res = check(r["url"])
+    deep_limit = cfg.deep_per_cycle if deep_limit is None else deep_limit
+    out = {"checked": 0, "inactive": 0, "unknown": 0, "deep": 0}
+    todo: dict[str, tuple[str, bool]] = {r["id"]: (r["url"], True) for r in deep_targets(conn, cfg, now, deep_limit)}
+    if limit > 0:
+        cands = conn.execute(
+            "SELECT DISTINCT l.id, l.url FROM listings l JOIN candidates c ON c.listing_id=l.id "
+            "WHERE l.status='active' AND l.url<>'' AND COALESCE(l.checked_at,0)<? ORDER BY COALESCE(l.checked_at,0), c.est_profit DESC LIMIT ?",
+            (now - 6 * 3600, max(1, limit - 1))).fetchall()
+        others = conn.execute(
+            "SELECT id, url FROM listings WHERE status='active' AND url<>'' AND item_key IS NOT NULL AND last_seen<? "
+            "AND COALESCE(checked_at,0)<? AND id NOT IN (SELECT listing_id FROM candidates)",
+            (now - 2 * 86400, now - 2 * 86400)).fetchall()
+        picked = list(cands) + (random.sample(others, 1) if others and len(cands) < limit else [])
+        for r in picked[:limit]:
+            todo.setdefault(r["id"], (r["url"], False))
+    changed: list[str] = []
+    for lid, (url, deep) in todo.items():
+        res = check(url)
         out["checked"] += 1
         if res["state"] == "unknown":
             out["unknown"] += 1
             continue                # капча или непонятная страница — статус не трогаем
-        conn.execute("UPDATE listings SET checked_at=? WHERE id=?", (now, r["id"]))
-        conn.execute("UPDATE candidates SET checked_at=? WHERE listing_id=?", (now, r["id"]))
+        conn.execute("UPDATE listings SET checked_at=? WHERE id=?", (now, lid))
+        conn.execute("UPDATE candidates SET checked_at=? WHERE listing_id=?", (now, lid))
         if res["state"] == "inactive":
             out["inactive"] += 1
-            conn.execute("UPDATE listings SET status='inactive', gone_at=? WHERE id=?", (now, r["id"]))
-            conn.execute("UPDATE candidates SET inactive_at=COALESCE(inactive_at, ?) WHERE listing_id=?", (now, r["id"]))
-        else:
-            if res.get("condition"):
-                conn.execute("UPDATE listings SET avito_condition=? WHERE id=?", (res["condition"], r["id"]))
-            if res.get("city"):
-                conn.execute("UPDATE listings SET city=?, is_msk=MAX(is_msk, ?) WHERE id=? AND COALESCE(city,'')=''",
-                             (res["city"], int(db.is_moscow("", res["city"])), r["id"]))
-            if len(res.get("description") or "") > 0:
-                conn.execute("UPDATE listings SET description=? WHERE id=? AND length(?)>length(COALESCE(description,''))",
-                             (res["description"], r["id"], res["description"]))
+            conn.execute("UPDATE listings SET status='inactive', gone_at=? WHERE id=?", (now, lid))
+            conn.execute("UPDATE candidates SET inactive_at=COALESCE(inactive_at, ?) WHERE listing_id=?", (now, lid))
+            continue
+        _store_card(conn, lid, res, now)
+        out["deep"] += 1
+        changed.append(lid)
     conn.commit()
+    if changed:                     # полное описание могло раскрыть брак или детали ПК — пересчитываем эти лоты
+        _reprocess(conn, cfg, changed, now, notifier)
     return out
+
+
+def _store_card(conn, lid: str, res: dict, now: float) -> None:
+    sets = {"deep_at": now}
+    for src, col in (("condition", "avito_condition"), ("seller_name", "seller_name"), ("seller_type", "seller_type"),
+                     ("avito_model", "avito_model"), ("rating", "rating")):
+        if res.get(src):
+            sets[col] = res[src]
+    if res.get("photos"):
+        sets["photos"] = json.dumps(res["photos"])
+    conn.execute(f"UPDATE listings SET {', '.join(k + '=?' for k in sets)} WHERE id=?", [*sets.values(), lid])
+    if res.get("city"):
+        conn.execute("UPDATE listings SET city=?, is_msk=MAX(is_msk, ?) WHERE id=? AND COALESCE(city,'')=''",
+                     (res["city"], int(db.is_moscow("", res["city"])), lid))
+    if res.get("description"):
+        conn.execute("UPDATE listings SET description=? WHERE id=? AND length(?)>length(COALESCE(description,''))",
+                     (res["description"], lid, res["description"]))
+
+
+def _reprocess(conn, cfg: Config, ids: list[str], now: float, notifier: Notifier | None) -> None:
+    """Пересчитать отдельные объявления по сохранённым данным (после чтения карточки). last_seen не меняется."""
+    from .collector import RawListing
+    groups: dict[tuple, list] = {}
+    for lid in ids:
+        r = conn.execute("SELECT * FROM listings WHERE id=?", (lid,)).fetchone()
+        l = RawListing(id=r["id"], title=r["title"] or "", price=r["price"] or 0.0, url=r["url"] or "",
+                       description=r["description"] or "", city=r["city"] or "", delivery=bool(r["delivery"]),
+                       image=r["image"] or "", rating=r["rating"], reviews=r["reviews"],
+                       seller_id=r["seller_id"] or "", seller_name=r["seller_name"] or "")
+        l._last_seen = r["last_seen"]
+        groups.setdefault((r["source"], r["category"], r["region"]), []).append(l)
+    for (source, category, region), items in groups.items():
+        process(conn, cfg, items, source, False, notifier=notifier, now=now, category=category, region=region,
+                save_stats=False)
+        for l in items:
+            conn.execute("UPDATE listings SET last_seen=? WHERE id=?", (l._last_seen, l.id))
+    conn.commit()

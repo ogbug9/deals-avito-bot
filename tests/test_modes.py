@@ -131,12 +131,18 @@ def test_categories_unrecognized_position_is_counted(conn):
     assert st["modes"]["categories"]["rejected"] == {"position_not_recognized": 1}
 
 
-def test_motherboards_are_priced_for_bundles_only(conn):
+def test_motherboards_grouped_by_socket_chipset_form(conn):
     mbs = [L(660 + i, 9000 + (i % 3) * 200, "Материнская плата Gigabyte B760M DS3H") for i in range(12)]
-    process(conn, Config(), mbs, "mb", False, now=NOW, category="materinskie_platy", region="moskva")
-    st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5")], category="materinskie_platy", src="mb")
-    assert tags(conn, 680) == set() and st["modes"]["categories"]["rejected"] == {"position_too_coarse": 1}
-    assert db.market_stats(conn, "MB B760", None, NOW + 60).n == 13
+    big = [L(690 + i, 19000, "Материнская плата MSI MAG B760 Tomahawk") for i in range(12)]      # ATX — другой рынок
+    process(conn, Config(), mbs + big, "mb", False, now=NOW, category="materinskie_platy", region="moskva")
+    st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5"), L(681, 4700, "Asus Prime B760M-K")],
+                category="materinskie_platy", src="mb")
+    assert db.market_stats(conn, "MB LGA1700 B760 mATX", None, NOW + 60).n == 14
+    assert db.market_stats(conn, "MB LGA1700 B760 ATX", None, NOW + 60).n == 12
+    # Gigabyte: точная позиция (с брендом) набрала 12 объявлений → доверие высокое; Asus: общая → среднее
+    assert cand(conn, 680, "categories")["confidence"] == "high"
+    assert "MB LGA1700 B760 mATX Gigabyte" in cand(conn, 680, "categories")["reason"]
+    assert cand(conn, 681, "categories")["confidence"] == "medium"
 
 
 # --- 1. целые ПК ---
@@ -188,7 +194,7 @@ def test_by_mode_report_and_recheck(conn):
     states = {"https://www.avito.ru/x_500": "inactive", "https://www.avito.ru/x_510": "active"}
     res = recheck(conn, Config(recheck_per_cycle=5), lambda url: {"state": states[url], "description": "", "condition": "Б/у"},
                   now=NOW + 7 * 3600)
-    assert res == {"checked": 2, "inactive": 1, "unknown": 0}
+    assert res == {"checked": 2, "inactive": 1, "unknown": 0, "deep": 1}
     assert conn.execute("SELECT status FROM listings WHERE id='500'").fetchone()[0] == "inactive"
     assert conn.execute("SELECT avito_condition FROM listings WHERE id='510'").fetchone()[0] == "Б/у"
     assert db.is_moscow("all", "в Москве") and not db.is_moscow("all", "в Зеленодольске")
