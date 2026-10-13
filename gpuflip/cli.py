@@ -10,7 +10,7 @@ import sys
 import time
 
 from . import db, sources
-from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv
+from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv, with_page
 from .config import Config
 from .notifier import Notifier, fmt_rub
 from . import modes, wordlists
@@ -103,9 +103,61 @@ def _active(conn) -> int:
     return conn.execute("SELECT COUNT(*) FROM listings WHERE status='active'").fetchone()[0]
 
 
+def _in_category(conn, category: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND category=?", (category,)).fetchone()[0]
+
+
+def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100) -> int:
+    """Добрать каждую категорию до target объявлений. Идёт вглубь выдачи постранично и сохраняет после каждой
+    страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места."""
+    srcs = [s for s in sources.load() if s.enabled]
+    plan = [(s, conn.execute("SELECT COUNT(*) FROM listings WHERE source=?", (s.url,)).fetchone()[0]) for s in srcs]
+    print("Сейчас в базе: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
+                                         for c in dict.fromkeys(s.category for s in srcs)), flush=True)
+    rc = 0
+    with _collector(cfg) as col:
+        first = True
+        for s, have in plan:
+            page = max(1, have // 50)          # с небольшим нахлёстом: за время между обходами выдача сдвигается
+            empty = 0
+            while _in_category(conn, s.category) < target and page <= max_page:
+                if not first:
+                    time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2))
+                first = False
+                started, cap0 = time.time(), col.captchas
+                try:
+                    items = parse_search_html(col.fetch(with_page(s.url, page)))
+                except BlockedError as e:
+                    _log_cycle(conn, started, s.name, captcha=col.captchas - cap0, blocked=1, error=str(e))
+                    print(f"⛔ {e}. Остановился на «{s.name}», стр. {page}. Запустите команду ещё раз позже — продолжит.",
+                          file=sys.stderr, flush=True)
+                    return 3
+                except FetchError as e:
+                    _log_cycle(conn, started, s.name, error=str(e))
+                    print(f"⛔ {s.name}: {e}", file=sys.stderr, flush=True)
+                    rc = 5
+                    break
+                if not items:
+                    break                      # выдача кончилась — в этом разделе больше нет
+                st = process(conn, cfg, items, source=s.url, complete=False, category=s.category, region=s.region,
+                             record_alerts=False)
+                _log_cycle(conn, started, f"{s.name}, стр. {page}", st, captcha=col.captchas - cap0)
+                print(f"{s.name}: стр. {page}, новых {st['new']} из {st['seen']} | в категории {_in_category(conn, s.category)}",
+                      flush=True)
+                empty = empty + 1 if st["new"] == 0 else 0
+                if empty >= 6 and page > have // 50 + 6:
+                    break                      # шесть страниц подряд без новых — дальше только повторы
+                page += 1
+    print("Итог: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
+                                for c in dict.fromkeys(s.category for s in srcs)), flush=True)
+    return rc
+
+
 def cmd_collect(args, cfg: Config) -> int:
     """Первичный набор базы: глубже обычного обхода, пока не наберётся --target объявлений."""
     conn = db.connect(cfg.db_path)
+    if args.per_category:
+        return collect_per_category(conn, cfg, args.per_category)
     srcs = [s for s in sources.load() if s.enabled]
     need = args.target - _active(conn)
     if need <= 0:
@@ -257,10 +309,14 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_report)
     p = sub.add_parser("collect", help="набрать базу до --target объявлений по sources.json")
     p.add_argument("--target", type=int, default=2000)
+    p.add_argument("--per-category", type=int, default=0, metavar="N", help="добрать каждую категорию до N объявлений")
     p.add_argument("--dry-run", action="store_true", help="печатать алерты в консоль (по умолчанию алертов нет)")
     p.set_defaults(fn=cmd_collect)
     p = sub.add_parser("rescore", help="пересчитать базу текущими правилами (после правки words/*.txt), без сети")
     p.set_defaults(fn=cmd_rescore)
+    p = sub.add_parser("app", help="десктопное приложение: окно, трей и фоновый сбор")
+    p.add_argument("rest", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=None)
     p = sub.add_parser("ui", help="локальный интерфейс с фильтрами: http://127.0.0.1:8765")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")
@@ -273,6 +329,10 @@ def main(argv=None) -> int:
     p.add_argument("--costs"); p.add_argument("--note")
     p.set_defaults(fn=cmd_deal)
 
+    raw = sys.argv[1:] if argv is None else list(argv)
+    if raw[:1] == ["app"]:                      # у приложения свои параметры и своя домашняя папка
+        from .app import main as app_main
+        return app_main(raw[1:])
     args = ap.parse_args(argv)
     wordlists.ensure_user_copies()   # words/*.txt рядом с базой — их можно править
     return args.fn(args, Config.load(args.env))

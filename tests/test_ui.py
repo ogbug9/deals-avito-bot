@@ -102,3 +102,48 @@ def test_http_rejects_foreign_origin(app):
         assert e.value.code == 403
     finally:
         srv.shutdown()
+
+
+# --- интерфейс v2: карточка, пометки, сохранённые поиски, рынок, статус ---
+def test_listing_detail_and_user_marks(app):
+    d = app.listing("1")
+    assert d["title"].startswith("Видеокарта RTX 3060") and len(d["price_history"]) == 1 and d["candidates"] == []
+    d = app.update_listing({"id": "1", "fav": True, "user_status": "checked", "note": "позвонить вечером"})
+    assert d["fav"] == 1 and d["user_status"] == "checked" and d["note"] == "позвонить вечером"
+    assert ids(app, fav=1) == ["1"] and ids(app, ustatus="checked") == ["1"] and ids(app, ustatus="none") == ["4", "5"]
+    assert app.update_listing({"id": "1", "user_status": None})["user_status"] is None
+    with pytest.raises(ValueError):
+        app.update_listing({"id": "1", "user_status": "украл"})
+    with pytest.raises(ValueError):
+        app.update_listing({"id": "нет такого", "fav": True})
+
+
+def test_saved_searches(app):
+    out = app.saved_change({"name": "Дешёвые 3060", "query": "q=3060&pmax=25000"})
+    assert [s["name"] for s in out] == ["Дешёвые 3060"]
+    assert app.saved_change({"delete": out[0]["id"]}) == []
+    with pytest.raises(ValueError):
+        app.saved_change({"name": "  "})
+
+
+def test_empty_result_names_the_blocking_filter(app):
+    r = app.listings(q(cat="protsessory", pmax=100, city="казань"))
+    assert r["total"] == 0
+    assert r["hints"][0] == {"param": "pmax", "label": "цена до", "count": 2}
+    assert "hints" not in app.listings(q(cat="protsessory"))
+
+
+def test_region_groups_and_sorts(app):
+    assert ids(app, region="msk") == ["1"] and ids(app, region="regions") == ["4", "5"]
+    assert [i["id"] for i in app.listings(q(sort="pct"))["items"]][0] in ("1", "4", "5")
+    assert ids(app, mode="market") == [] and ids(app, profit=1) == []
+
+
+def test_market_and_status_tabs(app):
+    m = app.market(q(days=7))
+    assert m["days"] == 7 and m["rows"] == []            # позиций с тремя объявлениями в тестовой базе нет
+    s = app.status()
+    assert s["last"]["finished"] is None and s["cycles"] == [] and s["app"]["desktop"] is False
+    assert {x["mode"] for x in s["by_mode"]} >= {"market", "bundles", "regional", "badtext", "urgent", "categories"}
+    with pytest.raises(ValueError):
+        app.app_action({"action": "pause"})          # пауза есть только в десктопном приложении

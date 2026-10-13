@@ -2,3 +2,7 @@ requests
 playwright
 beautifulsoup4
 pytest
+pywebview
+pystray
+pillow
+winotify

@@ -11,3 +11,7 @@ sources.json
 /words/
 *.db-shm
 *.db-wal
+build/
+dist/
+*.spec
+app.lock
