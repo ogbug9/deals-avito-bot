@@ -140,3 +140,14 @@ def test_alert_text_has_model_price_market_n_modes_reason_link():
     for part in ("RTX 3070", "19 000 ₽", "Рынок: 27 300 ₽, n=12", "скидка 30%", "Режим: ниже рынка, срочная продажа",
                  "торг до 17 100 ₽", "Чистыми ≈", "https://www.avito.ru/x_500"):
         assert part in text, part
+
+
+def test_per_category_collection_can_pick_and_order_sections():
+    from gpuflip import sources
+    srcs = sources.DEFAULT_SOURCES
+    picked = cli.category_sources(srcs, ["materinskie_platy", "protsessory"])
+    assert [s.category for s in picked][0] == "materinskie_platy" and {s.category for s in picked} == {"materinskie_platy", "protsessory"}
+    assert cli.category_sources(srcs, None) == list(srcs)
+    import pytest
+    with pytest.raises(SystemExit):
+        cli.category_sources(srcs, ["processors"])

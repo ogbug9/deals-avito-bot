@@ -180,10 +180,20 @@ def _in_category(conn, category: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM listings WHERE status='active' AND category=?", (category,)).fetchone()[0]
 
 
-def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100) -> int:
+def category_sources(srcs: list, cats: list[str] | None) -> list:
+    """Источники для добора: только выбранные разделы и в заданном порядке (сначала то, что нужнее)."""
+    if not cats:
+        return list(srcs)
+    unknown = [c for c in cats if c not in sources.CATEGORIES]
+    if unknown:
+        raise SystemExit(f"Неизвестные разделы: {', '.join(unknown)}. Есть: {', '.join(sources.CATEGORIES)}")
+    return sorted((s for s in srcs if s.category in cats), key=lambda s: cats.index(s.category))
+
+
+def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, cats: list[str] | None = None) -> int:
     """Добрать каждую категорию до target объявлений. Идёт вглубь выдачи постранично и сохраняет после каждой
     страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места."""
-    srcs = [s for s in sources.load() if s.enabled]
+    srcs = category_sources([s for s in sources.load() if s.enabled], cats)
     plan = [(s, conn.execute("SELECT COUNT(*) FROM listings WHERE source=?", (s.url,)).fetchone()[0]) for s in srcs]
     print("Сейчас в базе: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
                                          for c in dict.fromkeys(s.category for s in srcs)), flush=True)
@@ -230,7 +240,8 @@ def cmd_collect(args, cfg: Config) -> int:
     """Первичный набор базы: глубже обычного обхода, пока не наберётся --target объявлений."""
     conn = db.connect(cfg.db_path)
     if args.per_category:
-        return collect_per_category(conn, cfg, args.per_category)
+        cats = [c.strip() for c in (args.cats or "").split(",") if c.strip()]
+        return collect_per_category(conn, cfg, args.per_category, cats=cats or None)
     srcs = [s for s in sources.load() if s.enabled]
     need = args.target - _active(conn)
     if need <= 0:
@@ -393,6 +404,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("collect", help="набрать базу до --target объявлений по sources.json")
     p.add_argument("--target", type=int, default=2000)
     p.add_argument("--per-category", type=int, default=0, metavar="N", help="добрать каждую категорию до N объявлений")
+    p.add_argument("--cats", default="", help="только эти разделы и в этом порядке, через запятую (protsessory,materinskie_platy,…)")
     p.add_argument("--dry-run", action="store_true", help="печатать алерты в консоль (по умолчанию алертов нет)")
     p.set_defaults(fn=cmd_collect)
     p = sub.add_parser("rescore", help="пересчитать базу текущими правилами (после правки words/*.txt), без сети")
