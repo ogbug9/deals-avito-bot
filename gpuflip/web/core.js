@@ -11,7 +11,8 @@ G.day = ts => ts ? new Date(ts * 1000).toLocaleDateString("ru-RU", {day: "numeri
 G.days = d => d == null ? "—" : d < 1 ? "меньше дня" : Math.round(d) + " дн.";
 G.FLAGS = {mining: "майнинг", untested: "не тестировалась", prepay: "предоплата", repaired: "был ремонт", flashed: "прошивка",
   no_testing_allowed: "без проверки", issues: "есть нюансы", no_warranty: "без гарантии", model_from_desc: "модель не из заголовка",
-  reseller: "перекупщик / дубли", outlier: "дешевле всех похожих"};
+  reseller: "перекупщик / дубли", outlier: "дешевле всех похожих",
+  vram_mismatch: "память не как у модели — возможна подделка"};
 G.REASONS = {junk: "мусор", profit_too_small: "прибыль мала", margin_too_small: "маржа мала", out_of_budget: "вне бюджета",
   too_cheap_scam_risk: "подозрительно дёшево", no_price: "нет цены", thin_market: "мало объявлений для оценки",
   low_data: "мало данных — без алерта", prepayment: "предоплата", illiquid: "долго продаётся", defective: "брак", wanted: "«куплю»",

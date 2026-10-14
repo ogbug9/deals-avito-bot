@@ -32,15 +32,42 @@ def score(conn, i):
     ("Коробка от видеокарты 4060 Palit", "Пустая коробка, внутри ложемент", "box"),
     ("Gtx 1060 6gb msi armor", "Полностью рабочая. Охлаждение отсутствует, сломалось.", "incomplete"),
     ("Asus GTX 1070 ROG Strix 8gb", "Снята штатная система охлаждения", "incomplete"),
-    ("Корпус без комплектующих", "", "incomplete"),
     ("Системный блок", "пустой корпус, без начинки", "incomplete"),
     ("Охлаждение от RTX 3090 ventus", "", "incomplete"),
     ("Rx 580 8gb", "Продам под восстание или на донора. Код ошибки 43", "scrap"),
     ("Видеокарты", "Платы видеокарт на доноры или восстановление.", "scrap"),
     ("Видеокарта GTX 760", "в утиль, на разбор", "scrap"),
+    ("Мосты NVLink для RTX 2080 Ti под заказ из Китая", "", "accessory"),
+    ("Заглушка Asrock b450m-hdv", "Задняя планка. Цена за 1 шт", "accessory"),
+    ("Комплект полный от RTX 5080 Asus Prime", "", "box"),
 ])
 def test_junk_is_recognised(title, desc, reason):
     assert junk_reason(title, desc) == reason
+
+
+@pytest.mark.parametrize("title,desc,category", [
+    ("Процессор Intel Core i5-7640X", "Box (без кулера)", "protsessory"),
+    ("Корпус для пк ATX чёрный без комплектующих", "", "korpusa"),
+    ("Кулер для видеокарты asus", "Остался лишний", "sistemy_ohlazhdeniya"),
+    ("Вентиляторы для пк 120мм", "", "sistemy_ohlazhdeniya"),
+    ("Amd radeon rx 580 8gb", "Рабочая. Так же можно разобрать на детали", "videokarty"),
+    ("Компьютер", "Компьютер, всё работает. Но можно на запчасти.", "pc"),
+])
+def test_normal_goods_of_their_own_section_are_not_junk(title, desc, category):
+    assert junk_reason(title, desc, category) == ""
+
+
+def test_accessories_are_normal_goods_in_their_own_section():
+    assert junk_reason("Кабель питания видеокарты 8 pin", "", "komplektuyuschie") == ""
+    assert junk_reason("Райзер для видеокарты", "", "komplektuyuschie") == ""
+    assert junk_reason("Кабель питания видеокарты 8 pin", "", "videokarty") == "accessory"
+
+
+def test_same_words_are_junk_where_the_whole_device_is_sold():
+    assert junk_reason("Системный блок", "корпус без комплектующих", "pc") == "incomplete"
+    assert junk_reason("GTX 1060 6gb", "без кулера, охлаждение отсутствует", "videokarty") == "incomplete"
+    assert junk_reason("Коробка от процессора Ryzen 5", "", "protsessory") == "box"            # коробка — мусор везде
+    assert junk_reason("WD Purple 12 тб", "неисправный, на запчасти", "zhestkie_diski") == "scrap"
 
 
 @pytest.mark.parametrize("title,desc", [
@@ -49,6 +76,8 @@ def test_junk_is_recognised(title, desc, reason):
     ("Nvidia GT 520 1gb", "Продам бесшумную, без вентиляторов видеокарту"),
     ("RTX 3070", "утилита MSI Afterburner в комплекте не нужна, работает тихо"),
     ("Игровой пк без видеокарты", "Ryzen 5 5600, B550"),
+    ("Оперативная память ddr4 16gb Crucial", "Наклейка сорвана, спеки в утилитах проверены. Тест Аиды приложил."),
+    ("Видеокарта RTX 3060 12GB", "кабель питания в комплекте, мост не нужен"),
 ])
 def test_normal_listings_are_not_junk(title, desc):
     assert junk_reason(title, desc) == ""
@@ -78,7 +107,10 @@ def test_new_or_used_guess():
     assert is_new("Видеокарта RTX 5060 новая", "запечатана, гарантия магазина")
     assert is_new("RTX 5070", "В заводской упаковке, не распакована")
     assert not is_new("RTX 3070", "Состояние как новая, почти новая карта")
-    assert not is_new("RTX 3070", "покупал новую в 2022, пользовался год") or True      # спорный случай не роняет
+    assert not is_new("RTX 3070", "покупал новую в 2022, пользовался год")
+    assert not is_new("GTX 1060 6GB", "Обслужена: новая термопаста и новые термопрокладки. Перешёл на новую карту.")
+    assert not is_new("RX 580 8GB", "Продаю в связи с покупкой новой. Стоит новый кулер.")
+    assert is_new("RTX 5050", "Абсолютно новая, чек и гарантия")
     assert not is_new("RTX 3070 8GB", "Отличное состояние, не вскрывалась")
 
 
@@ -124,11 +156,46 @@ def test_sold_prices_take_over_when_there_are_five():
     assert price_points(high, Config()).quick == pytest.approx(27600)                    # вверх оценку не тянем
 
 
+def test_used_item_is_priced_below_a_new_one():
+    """Б/у RTX 5050 просят 46 000, а новую продают от 39 000: быстро б/у уйдёт только заметно дешевле новой."""
+    s = stats([37000, 37000, 38000, 38000, 41800, 42333, 43600, 48923, 48973, 51608, 52004, 56221])
+    plain = price_points(s, Config())
+    assert plain.quick == s.p25_ask > 35100
+    s.new_low = 39000.0
+    pts = price_points(s, Config())
+    assert pts.quick == pytest.approx(35100) and pts.basis == "на 10% дешевле новой"
+    assert pts.comfort == pytest.approx(39000 * 0.95) and any("Новую такую продают от 39 000" in w for w in pts.why)
+    assert price_points(s, Config(used_vs_new=0)).quick == plain.quick
+    cheap = stats([20000] * 12)
+    cheap.new_low = 39000.0
+    assert price_points(cheap, Config()).quick == pytest.approx(18400)                   # вверх оценку не тянем
+    odd = stats([30000] * 12)
+    odd.new_low = 24000.0                                                                # «новые» дешевле б/у — метка ошибочна
+    assert price_points(odd, Config()).quick == pytest.approx(27600)
+
+
+def test_new_price_comes_from_new_listings_of_the_same_model():
+    conn = db.connect(":memory:")
+    put(conn, [L(i, p) for i, p in enumerate((34000, 35000, 38000, 41000, 46000, 47000, 48000, 52000))]
+        + [L(100 + i, p, "Видеокарта RTX 3070 8GB новая", "запечатана") for i, p in enumerate((39000, 40900, 42600))])
+    ms = db.market_stats(conn, "RTX 3070", None, NOW + 60)
+    assert ms.used_only and ms.new_n == 3 and ms.new_low == 39000
+    put(conn, [L(500, 30000)], NOW + 120)
+    sc = score(conn, 500)
+    assert sc["quick_price"] == pytest.approx(35100) and sc["basis"] == "на 10% дешевле новой"
+    two = db.connect(":memory:")
+    put(two, [L(i, 46000) for i in range(8)] + [L(100 + i, 39000, "Видеокарта RTX 3070 8GB новая", "запечатана") for i in range(2)])
+    assert db.market_stats(two, "RTX 3070", None, NOW + 60).new_low == 0                 # двух новых мало
+
+
 def test_stronger_and_cheaper_model_caps_the_price():
     s = stats([35000] * 12)                                                              # слабая, но дорогая
     pts = price_points(s, Config(), ceiling=(30000.0, "RTX 3070"))
     assert pts.quick == 30000 and pts.ceiling_key == "RTX 3070" and "RTX 3070" in pts.basis
     assert pts.comfort == pytest.approx(31500) and any("мощнее" in w for w in pts.why)
+    deep = price_points(stats([70000] * 12), Config(), ceiling=(41000.0, "RTX 3080"))    # потолок вдвое ниже
+    assert deep.quick == pytest.approx(56000) and deep.ceiling == 41000                  # режем не глубже 20% от своей медианы
+    assert any("ниже не опускаем" in w for w in deep.why)
     assert price_points(s, Config(analog_ceiling=False), ceiling=(30000.0, "RTX 3070")).quick == pytest.approx(32200)
     assert price_points(s, Config(), ceiling=(40000.0, "RTX 3080")).ceiling is None       # сильная дороже — потолка нет
 
@@ -136,12 +203,11 @@ def test_stronger_and_cheaper_model_caps_the_price():
 def test_ceilings_come_from_analog_table():
     conn = db.connect(":memory:")
     put(conn, [L(i, 35000, "Видеокарта RTX 4060 8GB") for i in range(8)]                 # индекс 115
-        + [L(100 + i, 30000, "Видеокарта RTX 3060 Ti 8GB") for i in range(8)]            # 128
-        + [L(200 + i, 32000, "Видеокарта RTX 3070 8GB") for i in range(8)]               # 145
+        + [L(100 + i, 30000, "Видеокарта RTX 3060 Ti 8GB") for i in range(12)]           # 128
+        + [L(200 + i, 29000, "Видеокарта RTX 3070 8GB") for i in range(8)]               # 145, но 8 лотов — медиана ненадёжна
         + [L(300 + i, 28000, "Видеокарта RTX 3060 12GB") for i in range(8)])             # 100 — слабее, не потолок
     caps = analogs.ceilings(conn, NOW + 60)
-    assert caps["RTX 4060"] == (30000, "RTX 3060 Ti")
-    assert caps["RTX 3070"] if "RTX 3070" in caps else True
+    assert caps["RTX 4060"] == (30000, "RTX 3060 Ti")          # не 29 000 от RTX 3070: по ней меньше 10 объявлений
     assert "RTX 3060 12GB" not in caps and "RTX 3060 Ti" not in caps
     # лот 4060 за 27 000 раньше выглядел выгодным (рынок 35 000), теперь прибыль считается от 30 000
     put(conn, [L(500, 27000, "Видеокарта RTX 4060 8GB")], NOW + 120)

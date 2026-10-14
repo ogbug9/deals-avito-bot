@@ -28,7 +28,7 @@ def _normalize(conn, l, category: str) -> Parsed:
         part = None if (defect or wanted) else parts.parse_part(category, l.title, l.description)
         p = Parsed(kind=category, flags=risk_flags(text),
                    skip_reason="defective" if defect else "wanted" if wanted else "" if part else "position_not_recognized")
-    junk = junk_reason(l.title, l.description)
+    junk = junk_reason(l.title, l.description, category)
     db.save_parse(conn, l.id, p, defect=defect, wanted=wanted, part=part, urgent=urgent, junk=junk,
                   cond="new" if is_new(l.title, l.description) else "used")
     p.item_key = part.key if part else p.key

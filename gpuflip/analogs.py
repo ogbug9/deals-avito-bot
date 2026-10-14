@@ -92,22 +92,26 @@ def similar(conn, lid: str, now: float, limit: int = 8) -> dict:
             "price": r["price"], "cheaper_than_share": 1 - below / len(all_prices) if all_prices else None}
 
 
-def ceilings(conn, now: float, min_n: int = 6, table: dict | None = None) -> dict[str, tuple[float, str]]:
+def ceilings(conn, now: float, min_n: int = 6, table: dict | None = None, cap_n: int = 10) -> dict[str, tuple[float, str]]:
     """Для каждой модели с индексом — самая дешёвая медиана среди более сильных моделей, если она ниже своей.
 
     {модель: (цена, какая модель)}. Смысл: слабую карту не продать быстро дороже, чем просят за сильную.
     Индексы берутся из words/analogs.json; моделей без индекса правило не касается.
+    Сильная модель годится в потолок, только если по ней не меньше cap_n объявлений.
     """
     table = table or load()
     index = {k: v for g in table["groups"] for k, v in g["models"].items() if v}
     medians: dict[str, float] = {}
+    counts: dict[str, int] = {}
     for key in index:
         ms = db.market_stats(conn, key, None, now)
         if ms.n >= min_n:
-            medians[key] = ms.median_ask
+            medians[key], counts[key] = ms.median_ask, ms.n
     out: dict[str, tuple[float, str]] = {}
     for key, med in medians.items():
-        stronger = [(m, k) for k, m in medians.items() if k != key and index[k] >= index[key] * 1.05]
+        # потолком служит только модель с надёжной медианой: по 6 объявлениям чужую цену не режем
+        stronger = [(m, k) for k, m in medians.items()
+                    if k != key and counts[k] >= cap_n and index[k] >= index[key] * 1.05]
         if stronger:
             cap, cap_key = min(stronger)
             if cap < med:

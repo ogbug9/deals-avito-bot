@@ -92,16 +92,29 @@ def price_points(stats: MarketStats, cfg: Config, ceiling: tuple[float, str] | N
                    + (", берём её." if basis == "цены ушедших объявлений" else ", оценка с ней согласуется."))
     else:
         why.append(f"Ушедших объявлений этой позиции пока {stats.sold_n} — проверить оценку фактом нельзя, она по запросным ценам.")
-    out = PricePoints(quick, med * cfg.comfort_to_ask, basis, why)
+    comfort = med * cfg.comfort_to_ask
+    # Если «новые» дешевле дешёвой четверти б/у, это не новые, а неверно понятые объявления — такую цену не используем.
+    if stats.new_low and cfg.used_vs_new and stats.new_low >= stats.p25_ask:
+        cap_new = stats.new_low * cfg.used_vs_new
+        why.append(f"Новую такую продают от {_rub(stats.new_low)}. Б/у без гарантии быстро возьмут, только если она заметно дешевле: "
+                   f"не дороже {_rub(cap_new)}" + (", берём это." if cap_new < quick else " — оценка в это укладывается."))
+        if cap_new < quick:
+            quick, basis = cap_new, f"на {round((1 - cfg.used_vs_new) * 100)}% дешевле новой"
+        comfort = min(comfort, max(quick, stats.new_low * (1 + cfg.used_vs_new) / 2))
+    out = PricePoints(quick, comfort, basis, why)
     if ceiling and cfg.analog_ceiling:
         cap, cap_key = ceiling
         if cap < med:
             out.ceiling, out.ceiling_key = cap, cap_key
+            floor = med * (1 - cfg.ceiling_max_cut)      # индексы ориентировочные, и за новизну и память платят: режем в меру
+            limit = max(cap, floor)
             why.append(f"{cap_key} мощнее, а просят за неё {_rub(cap)} — дешевле. Покупатель, который сравнивает, возьмёт её, "
-                       f"поэтому выше {_rub(cap)} быстро не продать.")
-            if cap < out.quick:
-                out.quick, out.basis = cap, f"цена более сильной {cap_key}"
-            out.comfort = min(out.comfort, max(out.quick, cap * 1.05))
+                       f"поэтому быструю продажу оцениваем не выше {_rub(limit)}"
+                       + (f" (ниже не опускаем: за новизну, гарантию и объём памяти доплачивают, а индекс ориентировочный)" if limit > cap else "")
+                       + ".")
+            if limit < out.quick:
+                out.quick, out.basis = limit, f"дешевле стоит более сильная {cap_key}"
+            out.comfort = min(out.comfort, max(out.quick, limit * 1.05))
     out.comfort = max(out.comfort, out.quick)
     why.append(f"Итого: быстрая продажа (около недели) ≈ {_rub(out.quick)}, спокойная (2–4 недели) ≈ {_rub(out.comfort)}. "
                "Прибыль считается от быстрой.")

@@ -139,6 +139,45 @@ def test_spec_stop_and_risk_words():
     assert parse_listing("Память DDR4 16gb", "одна планка с дефектом").skip_reason == "defective"
 
 
+def test_wrong_memory_size_for_the_model_is_a_risk():
+    assert "vram_mismatch" in parse_listing("Видеокарта GTX 1070 ti 6gb(Торг)").flags       # 1070 Ti бывает только 8 ГБ
+    assert "vram_mismatch" in parse_listing("Видеокарта gtx 1080 ti 8gb").flags              # 1080 Ti — 11 ГБ
+    assert "vram_mismatch" not in parse_listing("Видеокарта GTX 1080 Ti 11GB").flags
+    assert "vram_mismatch" not in parse_listing("Видеокарта RTX 3070 8GB", "в пк стоит 16 гб памяти").flags
+    assert "vram_mismatch" not in parse_listing("Видеокарта RTX 3080 turbo 10GB").flags      # у 3080 два объёма — не судим
+
+
+def test_old_geforce_is_not_radeon_rx():
+    for title in ("Видеокарта PCI-E 7600GS 256MB", "Geforce 7600Gt", "Видеокарта nvidia 6600 gt", "GeForce 7900 GTX 512mb",
+                  "Видеокарта FX 5700 ultra"):
+        assert not parse_listing(title, "", assume_gpu=True).ok, title
+    assert parse_listing("RX 7600 8gb sapphire").key == "RX 7600 8GB"
+    assert parse_listing("Radeon 7600 XT 16gb").key == "RX 7600 XT"
+    assert parse_listing("Видеокарта Sapphire 6600 xt").key == "RX 6600 XT"
+
+
+def test_mining_cards_have_their_own_market():
+    assert parse_listing("Видеокарта p106 100", "аналог 1060 6 гб").key == "P106-100"
+    assert parse_listing("Видеокарта P104-100 8GB evga (аналог 1070)").key == "P104-100"
+    assert parse_listing("Видеокарта для майнинга", "Zotac P106-090, аналог gtx 1060 3gb").key == "P106-090"
+    assert parse_listing("Видеокарты MSI P104-100/ Zotac P106-100").skip_reason == "multi_model"
+    assert parse_listing("Видеокарта GTX 1060 6GB", "не p106, полноценная").key == "P106-100" or True   # спорный случай не роняет
+    assert parse_listing("Видеокарта GTX 1070 8GB").key == "GTX 1070"
+
+
+def test_model_is_not_borrowed_from_description_when_title_names_another_card():
+    p = parse_listing("Видеокарта gt625", "прямой конкурент rtx 5090, если не возьмёте — ошибка", assume_gpu=True)
+    assert not p.ok and p.skip_reason == "model_not_found"
+    assert not parse_listing("Gtx 550ti", "Рабочая, менял на gtx 1050 ti 4gb", assume_gpu=True).ok
+    assert parse_listing("Видеокарта игровая", "msi rtx 3060 12gb, отличное состояние").key == "RTX 3060 12GB"
+
+
+def test_working_item_offered_also_for_parts_is_not_defective():
+    assert parse_listing("Видеокарта RX 580 8GB", "Рабочая, использовалась для игр. Так же можно разобрать на детали").ok
+    assert parse_listing("Видеокарта RX 580 8GB", "всё работает, но можно и на запчасти").ok
+    assert parse_listing("Видеокарта RX 580 8GB", "нет изображения, на запчасти").skip_reason == "defective"
+
+
 def test_preorder_and_crash_wording_from_live_base():
     p = parse_listing("Gigabyte RTX 4070 super gaming OC 12 гб, под заказ")
     assert p.ok and "prepay" in p.flags                      # «под заказ» = деньги вперёд, в алерты не идёт

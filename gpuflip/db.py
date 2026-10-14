@@ -265,6 +265,7 @@ class MarketStats:
     p10_ask: float = 0.0
     used_only: bool = False               # рынок посчитан только по б/у (новые отброшены)
     new_n: int = 0                        # сколько объявлений похожи на новые
+    new_low: float = 0.0                  # от скольки продают новую (нижняя четверть цен новых), 0 — новых мало
     sold_n: int = 0
     median_sold_price: float | None = None
     days_to_sell: float | None = None     # медиана «жизни» ушедших объявлений, дни
@@ -272,6 +273,7 @@ class MarketStats:
 
 
 MIN_USED = 6      # столько б/у объявлений нужно, чтобы считать рынок только по ним
+NEW_MIN = 3       # от стольких новых объявлений их цена ограничивает оценку б/у
 
 
 def _trim(prices: list[float]) -> list[float]:
@@ -298,6 +300,9 @@ def market_stats(conn, key: str, exclude_id: str | None, now: float,
     # Перепродаём мы всегда б/у вещь, поэтому сравниваем с б/у: новые (с гарантией магазина) стоят дороже.
     used = [r["price"] for r in rows if r["cond"] != "new"]
     st.new_n = len(rows) - len(used)
+    fresh = sorted(r["price"] for r in rows if r["cond"] == "new")
+    if len(fresh) >= NEW_MIN:
+        st.new_low = statistics.quantiles(fresh, n=4)[0] if len(fresh) >= 4 else fresh[0]
     st.used_only = st.new_n > 0 and len(used) >= MIN_USED
     prices = _trim(sorted(used if st.used_only else [r["price"] for r in rows]))
     st.n = len(prices)
