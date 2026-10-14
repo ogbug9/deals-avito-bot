@@ -131,3 +131,12 @@ def test_pc_ambiguous_gpu_is_unknown():
 def test_fast_ddr5_kits_are_in_the_fast_tier():
     assert parse_ram("DDR5 Patriot Viper Venom 7400 MT/s 2x16gb").key == "RAM DDR5 32GB 6600+"
     assert parse_ram("Gskill trident z ddr5 32gb 7800mhz cl36").key == "RAM DDR5 32GB 6600+"
+
+
+def test_pc_disk_sizes_go_to_the_right_disk():
+    b = parse_pc("HP Z230 i5-4670 16Gb RAM, 140Gb SSD, 1Tb HDD", "")
+    assert {p.key for p in b.parts if p.kind in ("ssd", "hdd")} == {'HDD 1TB 3.5"'}     # 140 ГБ — нетиповой объём, не оцениваем
+    b = parse_pc("Компьютер", "SSD, 1TB HDD, 8 гб ddr4")
+    assert {p.key for p in b.parts if p.kind in ("ssd", "hdd")} == {'HDD 1TB 3.5"'}
+    b = parse_pc("Пк", "ssd 512 гб, hdd 2 тб")
+    assert {p.key for p in b.parts if p.kind in ("ssd", "hdd")} == {"SSD 512GB SATA", 'HDD 2TB 3.5"'}

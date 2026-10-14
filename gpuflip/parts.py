@@ -455,9 +455,21 @@ def _pc_psu(full: str) -> Part | None:
 
 def _pc_disks(full: str) -> list[Part]:
     out: list[Part] = []
-    for kind, rx in (("ssd", r"ssd|ссд|nvme|m\.?2"), ("hdd", r"hdd|жестк\w+\s+диск\w*|винчестер")):
-        m = re.search(rf"(?:{rx})\W{{0,12}}(?:[a-zа-я.]+\W{{0,3}}){{0,3}}?(\d{{1,4}})\s*(tb|тб|gb|гб)", full) \
-            or re.search(rf"(?<![0-9.,])(\d{{1,4}})\s*(tb|тб|gb|гб)\W{{0,4}}(?:{rx})", full)
+    kinds = (("ssd", r"ssd|ссд|nvme|m\.?2"), ("hdd", r"hdd|жестк\w+\s+диск\w*|винчестер"))
+    for kind, rx in kinds:
+        other = next(r for k, r in kinds if k != kind)
+        # «140Gb SSD, 1Tb HDD»: сначала объём прямо перед типом диска, потом после — но не тот, что стоит перед другим типом
+        m = None
+        for f in re.finditer(rf"(?<![0-9.,])(\d{{1,4}})\s*(tb|тб|gb|гб)(\W{{0,4}})(?:{rx})", full):
+            prev = re.search(rf"(?:{other})(\W{{0,4}})$", full[:f.start()])
+            if not prev or len(prev.group(1)) >= len(f.group(3)):   # «ssd 512 гб, hdd» — объём ближе к SSD, он его
+                m = f
+                break
+        if not m:
+            for f in re.finditer(rf"(?:{rx})\W{{0,12}}(?:[a-zа-я.]+\W{{0,3}}){{0,3}}?(\d{{1,4}})\s*(tb|тб|gb|гб)", full):
+                if not re.match(rf"\W{{0,4}}(?:{other})", full[f.end():]):
+                    m = f
+                    break
         if not m and kind == "ssd":      # «ssd 512» — объём без единиц, только типовые значения
             bare = re.search(r"(?:ssd|ссд|nvme)\W{0,3}(120|128|240|250|256|480|500|512|960|1000|1024)(?![0-9])", full)
             m = bare and re.match(r"(\d+)()", bare.group(1))
