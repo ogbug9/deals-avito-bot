@@ -155,3 +155,34 @@ def test_cpu_without_own_market_takes_a_near_twin(conn):
     twin = round(round(9100 * 0.92) * 0.95)
     assert cpu["key"] == "CPU i5-12400" and cpu["status"] == "approx" and cpu["value"] == pytest.approx(twin, abs=2)
     assert "i5-12400F" in cpu["note"] and out["approx"]
+
+
+def test_ladder_shows_neighbours_with_prices(conn):
+    from gpuflip import analogs
+    put(conn, [L(400 + i, 32000 + (i % 3) * 300, "Видеокарта RTX 3070 8GB") for i in range(12)]
+        + [L(430 + i, 36000, "Видеокарта RTX 3070 Ti 8GB") for i in range(8)]
+        + [L(460, 9000, "Видеокарта RTX 3070 Ti 8GB")], "videokarty")              # приманка вдвое дешевле рынка
+    lad = analogs.ladder(conn, "RTX 3070", NOW + 60)
+    keys = [x["key"] for x in lad["items"]]
+    assert lad["kind"] == "index" and keys.index("RTX 3060 12GB") < keys.index("RTX 3070") < keys.index("RTX 3070 Ti")
+    ti = next(x for x in lad["items"] if x["key"] == "RTX 3070 Ti")
+    assert ti["diff"] == 36000 - 32300 and ti["cheapest"]["price"] == 36000            # приманку за 9 000 не советуем
+    assert next(x for x in lad["items"] if x["current"])["key"] == "RTX 3070"
+    ram = analogs.ladder(conn, "RAM DDR4 16GB", NOW + 60)
+    assert ram is None or ram["kind"] == "price"
+    assert analogs.ladder_pattern("CPU i5-12400F") == ("CPU i_-12%", "Intel Core 12-го поколения")
+    assert analogs.ladder_pattern("CPU Ryzen 5 5600X")[0] == "CPU Ryzen _ 5%"
+    assert analogs.ladder_pattern("MB AM4 B550 mATX (средняя)")[0] == "MB AM4 %"
+
+
+def test_pc_is_compared_with_other_pcs_with_the_same_card(conn):
+    pcs = [L(1000 + i, 40000 + i * 500, "Игровой пк RTX 3060 12GB", "Ryzen 5 5600, 16 гб ddr4") for i in range(8)]
+    put(conn, pcs, "pc", NOW + 60)
+    put(conn, pcs + [L(1100, 30000, "Игровой пк RTX 3060 12GB i5-12400F")], "pc", NOW + 120)
+    p, _ = parts_of(conn, 1100)
+    import statistics
+    med = statistics.median(40000 + i * 500 for i in range(8))
+    assert p["peers"]["key"] == "RTX 3060 12GB" and p["peers"]["n"] == 8 and p["peers"]["median"] == med
+    assert p["peers"]["diff_pct"] == pytest.approx((med - 30000) / med)
+    lone, _ = parts_of(conn, 1000)
+    assert lone["peers"]["n"] >= 7          # новый лот попадёт в сравнение со следующего обхода (пересчёт идёт в два прохода)

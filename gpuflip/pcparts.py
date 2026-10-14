@@ -154,10 +154,27 @@ def _verdict(out: dict, price: float) -> str:
     return f"оценённые детали покрывают {out['ratio'] * 100:.0f}% цены{tail}"
 
 
+def peers(conn, cfg: Config, lid: str, gpu: str, price: float, now: float) -> dict | None:
+    """Рынок похожих ПК: живые системные блоки с той же видеокартой. Сравнение «ПК с RTX 3060: медиана …»."""
+    rows = [r[0] for r in conn.execute(
+        "SELECT price FROM listings WHERE category='pc' AND status='active' AND id<>? AND price>0 AND defect=0 AND wanted=0 "
+        "AND junk IS NULL AND last_seen>=? AND json_extract(parts_json, '$.items[0].kind')='gpu' "
+        "AND json_extract(parts_json, '$.items[0].key')=?", (lid, now - 14 * 86400, gpu))]
+    prices = db._trim(sorted(rows))
+    if len(prices) < cfg.min_market_n:
+        return {"key": gpu, "n": len(prices)} if prices else None
+    med = statistics.median(prices)
+    return {"key": gpu, "n": len(prices), "median": med, "p25": statistics.quantiles(prices, n=4)[0],
+            "diff_pct": (med - price) / med if price else None}
+
+
 def store(conn, cfg: Config, row, now: float, caps: dict | None = None, cache: dict | None = None) -> dict | None:
     """Посчитать разбор для строки listings и сохранить (parts_json, parts_value)."""
     out = breakdown(conn, cfg, row["title"] or "", row["description"] or "", row["price"] or 0.0, now,
                     json.loads(row["flags"] or "{}"), caps, cache)
+    gpu = next((x for x in (out or {}).get("items", []) if x["kind"] == "gpu" and x["key"]), None)
+    if out is not None:
+        out["peers"] = peers(conn, cfg, row["id"], gpu["key"], row["price"] or 0.0, now) if gpu else None
     value = out["value"] if out and any(x["value"] for x in out["items"]) else None
     conn.execute("UPDATE listings SET parts_json=?, parts_value=? WHERE id=?",
                  (json.dumps(out, ensure_ascii=False) if out else None, value, row["id"]))

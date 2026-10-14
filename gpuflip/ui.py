@@ -162,6 +162,13 @@ class App:
             d["similar"] = analogs.similar(c, lid, now)
             d["equivalents"] = analogs.cheaper_equivalents(c, r["item_key"], now) if r["item_key"] else None
             d["liquidity"] = db.liquidity(c, r["item_key"], now) if r["item_key"] else None
+            cfg = Config.load(self.env_path)
+            d["ladder"] = analogs.ladder(c, r["item_key"], now, cfg) if r["item_key"] else None
+            sc = d["score"] or {}
+            risk_p = (sc.get("risk_loss") or 0) / ((sc.get("target_buy") or 1) * cfg.risk_loss_share) if sc.get("target_buy") else 0
+            d["econ"] = {"fixed": cfg.fixed_costs, "capital": cfg.capital_cost_per_day, "fee": cfg.sell_fee_pct,
+                         "risk_share": cfg.risk_loss_share, "risk_p": risk_p, "days": sc.get("days_to_sell") or cfg.default_days_to_sell,
+                         "bargain": cfg.negotiation_discount}
             d["checklist_items"] = [{"key": k, "label": label} for k, label in CHECKLIST]
             hidden = db.excluded(c)
             d["seller_hidden"] = bool(r["seller_id"] and r["seller_id"] in hidden["seller"])

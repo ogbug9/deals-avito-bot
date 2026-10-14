@@ -80,10 +80,10 @@ G.fresh = function (it) {
 G.badges = function (it, opt) {
   // значки: режимы, срочность, доставка, снижение цены, мало данных, риск. У каждого — подсказка при наведении.
   const out = [], chip = (cls, text, tip) => out.push(G.h("span", {class: "chip " + cls, text, title: tip}));
-  for (const m of it.modes) chip("info", m.title, G.MODE_TIPS[m.key] || "");
+  for (const m of it.modes) chip(m.key === "manual" ? "" : "info", m.title, G.MODE_TIPS[m.key] || "");
   const fr = G.fresh(it); if (fr) chip(fr.cls, fr.text, fr.tip);
   if (it.urgent) chip("warn", "⚡ срочно / торг", "В тексте есть маркер срочности или торга — порог прибыли ниже");
-  if (it.delivery) chip("good", "доставка", "Есть Авито Доставка");
+  if (it.delivery) chip("", "доставка", "Есть Авито Доставка");
   if (it.price_drop) chip("good", "↓ " + G.fmt(it.price_drop), "Цена снижена с " + G.fmt(it.first_price) + " (на " + G.pct(it.price_drop_pct) + ")");
   if (it.days_listed >= 7) chip("", "висит " + Math.round(it.days_listed) + " дн.", "Столько дней объявление известно — можно торговаться смелее");
   if (it.reseller) chip("warn", "перекупщик", "У продавца несколько одинаковых лотов или объявление продублировано — штраф к оценке");

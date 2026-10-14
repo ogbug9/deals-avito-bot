@@ -4,55 +4,179 @@
 const h = G.h, svg = G.svg;
 let current = null, seq = 0;
 
-function chart(d) {
-  const W = 420, H = 150, Lp = 52, R = 10, T = 8, B = 22;
-  const a = d.price_history.map(p => [p.ts, p.price]);
-  const b = d.market_history.map(m => [Date.parse(m.day + "T12:00:00") / 1000, m.median]);
-  if (a.length) a.push([Date.now() / 1000, a[a.length - 1][1]]);          // цена держится до сегодняшнего дня
-  const all = a.concat(b);
-  if (all.length < 2) return h("div", {class: "small", text: "История ещё не накопилась: график появится после нескольких обходов."});
-  const x0 = Math.min(...all.map(p => p[0])), x1 = Math.max(...all.map(p => p[0]), x0 + 3600);
-  let y0 = Math.min(...all.map(p => p[1])), y1 = Math.max(...all.map(p => p[1]));
-  const pad = (y1 - y0) * 0.15 || y1 * 0.1 || 1; y0 = Math.max(0, y0 - pad); y1 += pad;
-  const X = t => Lp + (t - x0) / (x1 - x0) * (W - Lp - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const step = pts => pts.map((p, i) => (i ? "H" + X(p[0]).toFixed(1) + "V" + Y(p[1]).toFixed(1) : "M" + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1))).join("");
-  const line = pts => pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1)).join("");
-  const g = svg("svg", {viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Цена объявления и медиана позиции"});
-  for (let i = 0; i <= 3; i++) {
-    const v = y0 + (y1 - y0) * i / 3, y = Y(v);
-    g.append(svg("line", {x1: Lp, x2: W - R, y1: y, y2: y, stroke: "var(--line)", "stroke-width": 1}));
-    const t = svg("text", {x: Lp - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)"}); t.textContent = Math.round(v).toLocaleString("ru-RU"); g.append(t);
-  }
-  for (const [t, anchor] of [[x0, "start"], [x1, "end"]]) {
-    const tx = svg("text", {x: X(t), y: H - 6, "text-anchor": anchor, "font-size": 11, fill: "var(--muted)"});
-    tx.textContent = new Date(t * 1000).toLocaleDateString("ru-RU", {day: "numeric", month: "short"}); g.append(tx);
-  }
-  if (b.length) { g.append(svg("path", {d: line(b), fill: "none", stroke: "var(--series-b)", "stroke-width": 2}));
-    for (const p of b) g.append(svg("circle", {cx: X(p[0]), cy: Y(p[1]), r: 3, fill: "var(--series-b)"})); }
-  if (a.length) { g.append(svg("path", {d: step(a), fill: "none", stroke: "var(--series-a)", "stroke-width": 2}));
-    for (const p of a.slice(0, -1)) g.append(svg("circle", {cx: X(p[0]), cy: Y(p[1]), r: 3, fill: "var(--series-a)"})); }
-  return h("div", null, g, h("div", {class: "legend"},
-    h("span", null, h("i", {style: "background:var(--series-a)"}), "цена объявления"),
-    h("span", null, h("i", {style: "background:var(--series-b)"}), "медиана позиции")));
+// Графики рисуются под реальную ширину контейнера (шрифт не мельчает), перерисовываются при изменении размера,
+// по щелчку «⤢» открываются крупно, при наведении показывают значение ближайшей точки.
+G.chartBox = function (draw, legend, label) {
+  const box = h("div", {class: "chartbox"});
+  const area = h("div", {class: "chartarea"});
+  const tip = h("div", {class: "charttip", hidden: true});
+  const big = h("button", {class: "btn small chartbig", type: "button", text: "⤢", title: "Открыть крупно", onclick: () => G.chartZoom(draw, legend, label)});
+  box.append(big, area, tip, legend || "");
+  let lastW = 0;
+  const paint = () => {
+    const w = Math.round(area.clientWidth);
+    if (!w || Math.abs(w - lastW) < 4) return;
+    lastW = w;
+    area.replaceChildren(draw(w, Math.max(170, Math.min(320, Math.round(w * 0.42))), tip));
+  };
+  new ResizeObserver(paint).observe(area);
+  requestAnimationFrame(paint);
+  return box;
+};
+G.chartZoom = function (draw, legend, label) {
+  let dlg = $("chart-dlg");
+  if (!dlg) { dlg = h("dialog", {id: "chart-dlg", class: "chartdlg"}); document.body.append(dlg); dlg.onclick = e => { if (e.target === dlg) dlg.close(); }; }
+  const W = Math.min(1100, Math.round(window.innerWidth / (G.view.zoom || 1) * 0.86)), H = Math.round(Math.min(520, window.innerHeight * 0.6));
+  const tip = h("div", {class: "charttip", hidden: true});
+  dlg.replaceChildren(h("div", {class: "toolbar"}, h("h2", {text: label || "График"}),
+    h("button", {class: "btn small push", type: "button", text: "Закрыть ✕", onclick: () => dlg.close()})),
+    h("div", {class: "chartarea", style: "position:relative"}, draw(W, H, tip), tip), legend ? legend.cloneNode(true) : "");
+  dlg.style.maxWidth = (W + 48) + "px";
+  dlg.showModal();
+};
+function hover(g, tip, pts, fmt) {          // подсказка: ближайшая по горизонтали точка
+  g.addEventListener("pointermove", e => {
+    const r = g.getBoundingClientRect(), vb = g.viewBox.baseVal, x = (e.clientX - r.left) / r.width * vb.width;
+    let best = null;
+    for (const p of pts) if (!best || Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
+    if (!best) return;
+    tip.hidden = false; tip.textContent = fmt(best);
+    tip.style.left = Math.min(r.width - 150, Math.max(0, best.x / vb.width * r.width + 8)) + "px";
+    tip.style.top = Math.max(0, best.y / vb.height * r.height - 30) + "px";
+  });
+  g.addEventListener("pointerleave", () => { tip.hidden = true; });
 }
 
-// Разброс цен позиции: каждая точка — объявление, вертикальная черта — медиана, ромб — этот лот.
+function chart(d) {
+  const a0 = d.price_history.map(p => [p.ts, p.price]);
+  const b = d.market_history.map(m => [Date.parse(m.day + "T12:00:00") / 1000, m.median]);
+  const a = a0.slice(); if (a.length) a.push([Date.now() / 1000, a[a.length - 1][1]]);
+  const all = a.concat(b);
+  if (all.length < 2) return h("div", {class: "small", text: "История ещё не накопилась: график появится после нескольких обходов."});
+  const sc = d.score || {};
+  const draw = (W, H, tip) => {
+    const fs = 12, Lp = 64, R = 12, T = 10, B = 26;
+    const x0 = Math.min(...all.map(p => p[0])), x1 = Math.max(...all.map(p => p[0]), x0 + 3600);
+    const ys = all.map(p => p[1]).concat([sc.quick_price, sc.comfort_price].filter(Boolean));
+    let y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const pad = (y1 - y0) * 0.15 || y1 * 0.1 || 1; y0 = Math.max(0, y0 - pad); y1 += pad;
+    const X = t => Lp + (t - x0) / (x1 - x0) * (W - Lp - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+    const step = pts => pts.map((p, i) => (i ? "H" + X(p[0]).toFixed(1) + "V" + Y(p[1]).toFixed(1) : "M" + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1))).join("");
+    const line = pts => pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1)).join("");
+    const g = svg("svg", {viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Цена объявления и медиана позиции"});
+    const text = (x, y, s, anchor, fill) => { const t = svg("text", {x, y, "text-anchor": anchor, "font-size": fs, fill: fill || "var(--muted)"}); t.textContent = s; g.append(t); };
+    for (let i = 0; i <= 4; i++) {
+      const v = y0 + (y1 - y0) * i / 4, y = Y(v);
+      g.append(svg("line", {x1: Lp, x2: W - R, y1: y, y2: y, stroke: "var(--line)", "stroke-width": 1}));
+      text(Lp - 8, y + 4, Math.round(v).toLocaleString("ru-RU"), "end");
+    }
+    const ticks = Math.max(2, Math.min(6, Math.floor(W / 140)));
+    for (let i = 0; i < ticks; i++) {
+      const t = x0 + (x1 - x0) * i / (ticks - 1);
+      text(X(t), H - 8, new Date(t * 1000).toLocaleDateString("ru-RU", {day: "numeric", month: "short"}), i === 0 ? "start" : i === ticks - 1 ? "end" : "middle");
+    }
+    for (const [v, name, col] of [[sc.quick_price, "быстрая продажа", "var(--good)"], [sc.comfort_price, "спокойная", "var(--accent)"]]) {
+      if (!v) continue;
+      g.append(svg("line", {x1: Lp, x2: W - R, y1: Y(v), y2: Y(v), stroke: col, "stroke-width": 1.5, "stroke-dasharray": "5 4", opacity: .85}));
+      text(W - R - 4, Y(v) - 5, name + " " + G.fmt(v), "end", col);
+    }
+    const pts = [];
+    if (b.length) { g.append(svg("path", {d: line(b), fill: "none", stroke: "var(--series-b)", "stroke-width": 2.5}));
+      for (const p of b) { g.append(svg("circle", {cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: "var(--series-b)"})); pts.push({x: X(p[0]), y: Y(p[1]), t: p[0], v: p[1], s: "медиана"}); } }
+    if (a.length) { g.append(svg("path", {d: step(a), fill: "none", stroke: "var(--series-a)", "stroke-width": 2.5}));
+      for (const p of a.slice(0, -1)) { g.append(svg("circle", {cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: "var(--series-a)"})); pts.push({x: X(p[0]), y: Y(p[1]), t: p[0], v: p[1], s: "цена лота"}); } }
+    if (tip) hover(g, tip, pts, p => p.s + ": " + G.fmt(p.v) + " · " + new Date(p.t * 1000).toLocaleDateString("ru-RU", {day: "numeric", month: "short"}));
+    return g;
+  };
+  const legend = h("div", {class: "legend"},
+    h("span", null, h("i", {style: "background:var(--series-a)"}), "цена объявления"),
+    h("span", null, h("i", {style: "background:var(--series-b)"}), "медиана позиции"),
+    sc.quick_price ? h("span", null, h("i", {style: "background:var(--good)"}), "быстрая продажа") : null,
+    sc.comfort_price ? h("span", null, h("i", {style: "background:var(--accent)"}), "спокойная") : null);
+  return G.chartBox(draw, legend, "Цена и медиана — " + (d.item_key || d.title));
+}
+
+// Разброс цен позиции: точки — объявления, полоса — средняя половина цен, черта — медиана, ромб — этот лот.
 function spread(s) {
   if (s.prices.length < 3) return null;
-  const W = 420, H = 56, P = 12, lo = s.prices[0], hi = s.prices[s.prices.length - 1], span = hi - lo || 1;
-  const X = v => P + (v - lo) / span * (W - 2 * P);
-  const g = svg("svg", {viewBox: "0 0 " + W + " " + H, width: "100%", role: "img", "aria-label": "Разброс цен позиции и место этого лота"});
-  g.append(svg("line", {x1: P, x2: W - P, y1: 24, y2: 24, stroke: "var(--line)", "stroke-width": 2}));
-  s.prices.forEach((p, i) => g.append(svg("circle", {cx: X(p), cy: 24 + ((i % 3) - 1) * 5, r: 3, fill: "var(--muted)", opacity: .55})));
-  if (s.median != null) g.append(svg("line", {x1: X(s.median), x2: X(s.median), y1: 8, y2: 40, stroke: "var(--series-b)", "stroke-width": 2}));
-  if (s.price) { const x = X(Math.max(lo, Math.min(hi, s.price))); g.append(svg("path", {d: "M" + x + ",13 l7,11 l-7,11 l-7,-11 z", fill: "var(--series-a)"})); }
-  for (const [v, anchor, x] of [[lo, "start", P], [hi, "end", W - P]]) {
-    const t = svg("text", {x, y: H - 2, "text-anchor": anchor, "font-size": 11, fill: "var(--muted)"}); t.textContent = Math.round(v).toLocaleString("ru-RU") + " ₽"; g.append(t);
-  }
-  return h("div", null, g, h("div", {class: "legend"},
+  const q = (arr, f) => { const i = (arr.length - 1) * f, lo = Math.floor(i); return arr[lo] + (arr[Math.ceil(i)] - arr[lo]) * (i - lo); };
+  const p25 = q(s.prices, .25), p75 = q(s.prices, .75);
+  const draw = (W, H0, tip) => {
+    const H = Math.max(84, Math.min(120, Math.round(H0 * 0.5))), P = 16, fs = 12, mid = H / 2 - 6;
+    const lo = s.prices[0], hi = s.prices[s.prices.length - 1], span = hi - lo || 1;
+    const X = v => P + (v - lo) / span * (W - 2 * P);
+    const g = svg("svg", {viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Разброс цен позиции и место этого лота"});
+    g.append(svg("rect", {x: X(p25), y: mid - 14, width: Math.max(2, X(p75) - X(p25)), height: 28, rx: 6, fill: "var(--sel)", opacity: .8}));
+    g.append(svg("line", {x1: P, x2: W - P, y1: mid, y2: mid, stroke: "var(--line)", "stroke-width": 2}));
+    const pts = [];
+    s.prices.forEach((p, i) => { const cx = X(p), cy = mid + ((i % 3) - 1) * 6; g.append(svg("circle", {cx, cy, r: 3.5, fill: "var(--muted)", opacity: .6})); pts.push({x: cx, y: cy, v: p}); });
+    if (s.median != null) g.append(svg("line", {x1: X(s.median), x2: X(s.median), y1: mid - 20, y2: mid + 20, stroke: "var(--series-b)", "stroke-width": 2.5}));
+    if (s.price) { const x = X(Math.max(lo, Math.min(hi, s.price))); g.append(svg("path", {d: "M" + x + "," + (mid - 13) + " l8,13 l-8,13 l-8,-13 z", fill: "var(--series-a)", stroke: "var(--card)", "stroke-width": 1.5})); }
+    for (const [v, anchor, x] of [[lo, "start", P], [hi, "end", W - P]]) {
+      const t = svg("text", {x, y: H - 6, "text-anchor": anchor, "font-size": fs, fill: "var(--muted)"}); t.textContent = Math.round(v).toLocaleString("ru-RU") + " ₽"; g.append(t);
+    }
+    if (tip) hover(g, tip, pts, p => G.fmt(p.v));
+    return g;
+  };
+  const legend = h("div", {class: "legend"},
     h("span", null, h("i", {style: "background:var(--series-a);height:9px;width:9px;transform:rotate(45deg)"}), "этот лот"),
     h("span", null, h("i", {style: "background:var(--series-b)"}), "медиана " + G.fmt(s.median)),
-    h("span", {text: "всего " + s.n + " объявлений"})));
+    h("span", null, h("i", {style: "background:var(--sel);height:9px"}), "половина цен: " + G.fmt(p25) + " – " + G.fmt(p75)),
+    h("span", {text: "всего " + s.n + " объявлений"}));
+  return G.chartBox(draw, legend, "Разброс цен — " + s.key);
+}
+
+// «Линейка»: соседи по серии выше и ниже, с ценами и ссылками на самый дешёвый живой лот.
+function ladderSection(d) {
+  const L = d.ladder;
+  if (!L || !L.items || L.items.length < 2) return null;
+  const name = k => k.replace(/^(CPU|RAM|MB|PSU) /, "");
+  const rows = L.items.map(x => {
+    const c = x.cheapest, u = c ? G.safeUrl(c.url) : null;
+    return h("tr", {class: x.current ? "cur" : ""},
+      h("td", null, h("span", {text: name(x.key)}), x.key === L.best_value ? h("span", {class: "star", text: " ★", title: "Дешевле всех за единицу производительности"}) : null,
+        x.index ? h("span", {class: "small", text: " · " + x.index + "¹"}) : null),
+      h("td", {class: "r num", text: G.fmt(x.median), title: x.n + " объявлений²"}),
+      h("td", {class: "r num small", text: x.quick ? G.fmt(x.quick) : "—", title: "Быстрая продажа"}),
+      h("td", {class: "r num " + (x.current ? "small" : x.diff < 0 ? "down" : "up"), text: x.current ? "эта" : (x.diff > 0 ? "+" : "−") + Math.abs(Math.round(x.diff)).toLocaleString("ru-RU")}),
+      h("td", {class: "r"}, c ? h("span", {class: "ladder-act"},
+          u ? h("a", {class: "link num", href: u, target: "_blank", rel: "noopener noreferrer", text: G.fmt(c.price) + " ↗", title: "Самый дешёвый живой лот³: " + c.title}) : h("span", {class: "num", text: G.fmt(c.price)}),
+          h("button", {class: "link", type: "button", text: "все", title: "Показать все объявления этой позиции", onclick: () => { G.list.restore("model=" + encodeURIComponent(x.key)); G.list.reload(); G.tab("list"); }}))
+        : h("span", {class: "small", text: "—"})));
+  });
+  return h("div", null, h("h3", {text: "Линейка: что выше и ниже — " + L.label}),
+    h("div", {class: "tablewrap"}, h("table", {class: "t ladder"},
+      h("thead", null, h("tr", null, h("th", {text: "Модель"}), h("th", {class: "r", text: "Медиана"}), h("th", {class: "r", text: "Быстро"}),
+        h("th", {class: "r", text: "Разница"}), h("th", {class: "r", text: "Самый дешёвый"}))),
+      h("tbody", null, rows))),
+    h("ol", {class: "notes"},
+      L.kind === "index" ? h("li", {text: "Индекс производительности: RTX 3060 12GB = 100. Ориентировочный, из words\\analogs.json — проверьте по тестам."}) : h("li", {text: "Порядок — по медиане цены внутри поколения / типа."}),
+      h("li", {text: "Медиана — запросные цены живых объявлений за 14 дней, без мусора и брака."}),
+      h("li", {text: "Самый дешёвый — не дешевле 60% медианы: явные приманки и цены-заглушки скрыты."})));
+}
+
+// Калькулятор торга: двигаешь цену покупки — сразу видно чистую прибыль и цену, ниже которой не уйти в минус.
+function bargain(d) {
+  const sc = d.score, e = d.econ;
+  if (!sc || !sc.quick_price || !d.price || !e) return null;
+  const k = 1 + e.capital * e.days + Math.min(0.6, e.risk_p) * e.risk_share;
+  const net = (buy, sell) => sell * (1 - e.fee) - buy - e.fixed - buy * (k - 1);
+  const breakeven = (sc.quick_price * (1 - e.fee) - e.fixed) / k;
+  const min = Math.round(d.price * 0.5 / 100) * 100, max = Math.round(d.price);
+  const start = Math.round(sc.target_buy || d.price * (1 - e.bargain));
+  const out = h("div", {class: "calc-out"}), inp = h("input", {type: "range", min, max, step: 100, value: start, "aria-label": "Цена покупки"});
+  const show = () => {
+    const b = Number(inp.value), q = net(b, sc.quick_price), c = sc.comfort_price ? net(b, sc.comfort_price) : null;
+    out.replaceChildren(
+      h("div", null, h("span", {class: "small", text: "Купить за "}), h("b", {class: "num", text: G.fmt(b)}),
+        h("span", {class: "small", text: " (" + (b < d.price ? "−" + G.pct(1 - b / d.price) + " к цене" : "без торга") + ")"})),
+      h("div", null, h("span", {class: "small", text: "Чистыми при быстрой продаже: "}), h("b", {class: "num " + (q > 0 ? "p-strong" : "up"), text: G.fmt(q) + " (" + G.pct(q / b) + ")"})),
+      c != null ? h("div", null, h("span", {class: "small", text: "При спокойной: "}), h("b", {class: "num", text: G.fmt(c)})) : null);
+  };
+  inp.oninput = show; show();
+  return h("div", null, h("h3", {text: "Калькулятор торга"}), inp, out,
+    h("div", {class: "small", text: "Безубыточная цена покупки — " + G.fmt(breakeven) + ": дороже неё сделка уходит в минус при быстрой продаже. "
+      + "Учтены издержки " + G.fmt(e.fixed) + ", заморозка денег на " + Math.round(e.days) + " дн. и штраф за риск."}));
 }
 
 function gallery(d) {
@@ -168,6 +292,7 @@ function render(d) {
     h("h3", {text: "Описание"}), h("div", {style: "white-space:pre-line;overflow-wrap:anywhere", text: d.description || "—"}),
     h("h3", {text: "Цена и медиана"}), chart(d),
     h("h3", {text: "Расчёт"}), h("table", {class: "kv"}, h("tbody", null, rows)),
+    bargain(d),
     sc && sc.why && sc.why.length ? h("div", null, h("h3", {text: "Как посчитана цена продажи"}),
       h("ul", {class: "reasons"}, sc.why.map(t => h("li", {text: t})))) : null,
     sim && sim.key ? h("div", null, h("h3", {text: "Похожие лоты — " + sim.key}), spread(sim),
@@ -179,6 +304,7 @@ function render(d) {
         h("span", {class: "num small", style: "width:74px;text-align:right", text: (x.vs_this > 0 ? "+" : "") + Math.round(x.vs_this).toLocaleString("ru-RU")}),
         G.safeUrl(x.url) ? h("a", {class: "link", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "↗", title: "Открыть на Авито"}) : null)),
       sim.items.length ? null : h("div", {class: "small", text: "Других объявлений этой позиции в базе нет."})) : null,
+    ladderSection(d),
     eq && eq.group ? h("div", null, h("h3", {text: "Эквиваленты дешевле"}),
       h("div", {class: "small", text: "Группа «" + eq.group + "». Индекс производительности ориентировочный — проверьте по своим источникам (words\\analogs.json)."}),
       eq.items.length ? eq.items.map(x => h("div", {class: "simrow"},

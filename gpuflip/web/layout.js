@@ -30,7 +30,16 @@ if (gutter) {
   });
   gutter.ondblclick = () => G.toggleFilters();
 }
-G.toggleFilters = function () { G.view.filters = G.view.filters === false; G.applyView(); G.saveView(); };
+G.toggleFilters = function () {
+  if (window.innerWidth / zoom() <= 900) {              // узкое окно: фильтры выезжают поверх списка
+    root.dataset.drawer = root.dataset.drawer === "open" ? "" : "open";
+    return;
+  }
+  G.view.filters = G.view.filters === false; G.applyView(); G.saveView();
+};
+document.addEventListener("click", e => {                // щелчок мимо шторки закрывает её
+  if (root.dataset.drawer === "open" && !e.target.closest("aside.filters, #f-toggle")) root.dataset.drawer = "";
+});
 
 // ширина пристёгнутой панели
 const grip = document.createElement("div");

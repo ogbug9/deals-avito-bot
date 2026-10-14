@@ -162,10 +162,21 @@ function cardEl(it, i) {
   if (it.unit_price) side.append(h("div", {class: "small num", text: Math.round(it.unit_price).toLocaleString("ru-RU") + (/^PSU/.test(it.item_key || "") ? " ₽/Вт" : " ₽/ГБ")}));
   if (sc && sc.market_n >= 6) side.append(h("div", {class: "small num", text: "рынок " + G.fmt(sc.median_ask) + " (" + discText(it) + ")", title: "Медиана запросных цен позиции и отличие цены лота от неё"}),
     h("div", {class: "small num", text: "быстро продать ≈ " + G.fmt(sc.quick_price), title: (sc.why || []).join("\n")}));
+  const pp = it.parts;
+  if (!sc && pp) {                              // ПК: оценка по похожим ПК и по сумме деталей
+    const pr = pp.peers;
+    if (pr && pr.median) side.append(h("div", {class: "small num", text: "ПК с " + pr.key + ": " + G.fmt(pr.median) + " (n=" + pr.n + ")",
+      title: "Медиана живых системных блоков с той же видеокартой"}),
+      h("div", {class: "num " + (pr.diff_pct > 0.1 ? "p-mild" : "small"), text: pr.diff_pct > 0 ? "дешевле похожих на " + G.pct(pr.diff_pct) : "дороже похожих на " + G.pct(-pr.diff_pct)}));
+    else if (pr) side.append(h("div", {class: "small", text: "ПК с " + pr.key + ": похожих пока " + pr.n + " — мало для оценки"}));
+    if (pp.value) side.append(h("div", {class: "small num", text: "детали ≈ " + G.fmt(pp.value) + " (" + pp.priced + " из " + pp.expected + ")", title: pp.verdict}));
+    if (pp.net > 0 && !pp.warn) side.append(h("div", {class: "profit num " + G.profitClass(pp.net), text: "по частям ≈ +" + G.fmt(pp.net), title: "Чистыми при продаже по частям (нижняя граница)"}));
+  }
   if (it.est_profit > 0) side.append(h("div", {class: "profit num " + G.profitClass(it.est_profit), text: "≈ " + profitText(it) + " (" + G.pct(it.est_profit_pct) + ")", title: "Расчётная чистая прибыль после торга, издержек и штрафов"}));
   else if (sc && sc.reason && !sc.ok && sc.market_n) side.append(h("div", {class: "small", text: G.reason(sc.reason)}));
   side.append(h("div", {class: "chips", style: "justify-content:flex-end;margin-top:6px"},
-    h("span", {class: "chip " + tr.cls, text: tr.text, title: tr.tip}),
+    !sc && pp ? h("span", {class: "chip", text: pp.peers && pp.peers.median ? "похожих ПК: " + pp.peers.n : "оценено " + pp.priced + " из " + pp.expected})
+      : h("span", {class: "chip " + tr.cls, text: tr.text, title: tr.tip}),
     it.confidence ? h("span", {class: "chip " + (it.confidence === "high" ? "good" : "warn"), text: "доверие: " + G.CONF[it.confidence], title: "Насколько надёжно определены модель и рынок"}) : null));
   const note = h("input", {type: "text", placeholder: "Заметка", value: it.note || "", "aria-label": "Заметка"});
   note.onchange = () => A.save(it, {note: note.value}); note.onclick = e => e.stopPropagation();
@@ -177,7 +188,8 @@ function cardEl(it, i) {
       h("div", {class: "meta", text: [it.city, it.date_text, it.category_title, it.item_key].filter(Boolean).join(" · ") || "—"}),
       h("div", {class: "chips", style: "margin-top:6px"}, G.badges(it)),
       G.pcBox(it),
-      it.reason ? h("ul", {class: "reasons"}, it.reason.split(" | ").map(r => h("li", {text: r}))) : null),
+      it.reason ? (rs => h("div", null, h("ul", {class: "reasons short"}, h("li", {text: rs[0], title: rs.join("\n\n")})),
+        rs.length > 1 ? h("span", {class: "more", text: "ещё " + (rs.length - 1) + " — в панели лота (Enter)"}) : null))(it.reason.split(" | ")) : null),
     side,
     h("div", {class: "tools"}, star(it), h("label", {class: "chk", title: "Добавить в сравнение (c)"}, cmpBox(it), "Сравнить"), statusSelect(it), note,
       h("button", {class: "link", type: "button", text: "Скрыть продавца", title: "Не показывать лоты этого продавца", onclick: () => A.hide("seller", it)}),
@@ -343,7 +355,10 @@ L.facets = async function () {
   $("stat").textContent = "активных " + G.num(f.total) + " · ушло " + G.num(f.gone) + " · давно не видели " + G.num(f.stale)
     + " · копится с " + G.day(f.since) + " · обновлено " + G.when(f.last_seen);
   $("stat").title = "База не очищается: ушедшие объявления остаются в ней с датами. Фильтр «Объявления» слева показывает их.";
-  $("f-cats").replaceChildren(...f.categories.map(c => {
+  const all = h("input", {type: "checkbox", checked: !L.cats.size});
+  all.onchange = () => { L.cats.clear(); L.reload(); };
+  $("f-cats").replaceChildren(h("label", {class: "chk"}, all, h("b", {text: "Все категории"}),
+    h("span", {class: "n num", text: f.categories.reduce((a, c) => a + c.n, 0)})), ...f.categories.map(c => {
     const cb = h("input", {type: "checkbox", value: c.key, checked: L.cats.has(c.key)});
     cb.onchange = () => { cb.checked ? L.cats.add(c.key) : L.cats.delete(c.key); L.reload(); };
     return h("label", {class: "chk"}, cb, h("span", {text: c.title}), h("span", {class: "n num", text: c.n}));
