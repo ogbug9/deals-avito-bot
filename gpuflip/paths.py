@@ -120,12 +120,14 @@ def enter_home(legacy: Path | None = None) -> Path:
         except OSError as e:
             print(f"Не удалось перенести данные из {legacy}: {e}. Закройте все окна gpuflip и запустите ещё раз.", flush=True)
             raise SystemExit(2)
-    from .guard import check_db
+    from .guard import check_db, restore_latest
     bad = check_db(h / "gpuflip.db")
     if bad:
-        print(f"База {h / 'gpuflip.db'} повреждена ({bad}). Ничего не записываю. Восстановите её из папки backups "
-              "(последняя копия gpuflip-*.db или auto-*.db) и запустите снова.", flush=True)
-        raise SystemExit(4)
+        restored = restore_latest(h)          # повреждённая уходит в backups/повреждённая-*, на её место — последняя целая копия
+        if not restored:
+            print(f"База {h / 'gpuflip.db'} повреждена ({bad}), целых копий нет. Ничего не записываю.", flush=True)
+            raise SystemExit(4)
+        print(f"База была повреждена ({bad[:120]}); восстановлена копия {restored}. Повреждённая лежит в backups.", flush=True)
     if not (h / ".env").exists():
         example = package_dir().parent / ".env.example"
         (h / ".env").write_text(example.read_text(encoding="utf-8") if example.exists() else "", encoding="utf-8")

@@ -90,3 +90,34 @@ def check_db(path: str | Path) -> str:
     except sqlite3.Error as e:
         return str(e)
     return "" if res == "ok" else str(res)
+
+
+def restore_latest(home_dir: str | Path) -> str:
+    """Повреждённую базу — в backups/повреждённая-<время>/, на её место — самую свежую целую копию.
+    Возвращает имя восстановленной копии или '' (целых копий нет). Ничего не удаляется."""
+    import shutil
+    h = Path(home_dir)
+    db = h / "gpuflip.db"
+    copies = sorted((p for p in (h / "backups").glob("*.db") if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
+    good = next((p for p in copies if not check_db(p) and _count(p) > 0), None)
+    if good is None:
+        return ""
+    aside = h / "backups" / f"повреждённая-{time.strftime('%Y%m%d-%H%M%S')}"
+    aside.mkdir(parents=True, exist_ok=True)
+    for tail in ("", "-wal", "-shm"):
+        f = h / f"gpuflip.db{tail}"
+        if f.exists():
+            shutil.move(str(f), str(aside / f.name))
+    shutil.copy2(str(good), str(db))
+    return good.name
+
+
+def _count(p: Path) -> int:
+    try:
+        c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        try:
+            return c.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return 0

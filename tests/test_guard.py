@@ -75,3 +75,21 @@ def test_second_app_is_not_started_while_the_first_process_lives(monkeypatch):
     app.lock_path().write_text(json.dumps({"port": 1, "pid": 999_999_9}), encoding="utf-8")       # процесса нет — можно запускаться
     assert app.running_instance() is None
     app.lock_path().unlink()
+
+
+def test_damaged_base_is_replaced_by_the_latest_good_copy(tmp_path):
+    h = tmp_path / "home"
+    (h / "backups").mkdir(parents=True)
+    c = db.connect(str(h / "gpuflip.db"))
+    c.execute("INSERT INTO listings(id, title, price, url, first_seen, last_seen, source) VALUES('1','x',1,'u',0,0,'s')")
+    c.commit()
+    c.close()
+    good = db.rolling_backup(str(h / "gpuflip.db"), "hour", keep=5, every=0)
+    (h / "backups" / "hour-gpuflip-99999999-000000.db").write_bytes(b"\xff" * 8192)            # свежее, но испорченное
+    raw = bytearray((h / "gpuflip.db").read_bytes())
+    raw[100:4096] = b"\xff" * (4096 - 100)
+    (h / "gpuflip.db").write_bytes(bytes(raw))
+    assert guard.check_db(h / "gpuflip.db")
+    name = guard.restore_latest(h)
+    assert name and name in good and guard.check_db(h / "gpuflip.db") == ""
+    assert any(p.name.startswith("повреждённая-") for p in (h / "backups").iterdir())          # испорченная не удалена
