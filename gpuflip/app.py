@@ -408,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     desk.window.events.closing += desk.on_closing
     desk.start_tray()
     # своё постоянное хранилище окна: тема, вид и корзина сравнения не сбрасываются при перезапуске
+    webview.settings["ALLOW_DOWNLOADS"] = True          # иначе встроенное окно молча игнорирует CSV и картинки сравнения
     webview.start(private_mode=False, storage_path=str(h / "webview"))
     desk.quit()
     return 0
