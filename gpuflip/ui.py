@@ -616,15 +616,16 @@ class App:
     def app_status(self) -> dict:
         if self.desktop:
             return self.desktop.status()
+        from . import progress
         st = self.scan_status()
-        return {"desktop": False, "state": "running" if st["running"] else "idle", "paused": False,
+        return {"desktop": False, "progress": progress.read(), "state": "running" if st["running"] else "idle", "paused": False,
                 "status_line": "идёт обход…" if st["running"] else "обход запускается вручную или командой watch",
                 "autostart": False, "home": str(home())}
 
     def app_action(self, data: dict) -> dict:
         action = str((data or {}).get("action") or "")
         if self.desktop:
-            return self.desktop.action(action)
+            return self.desktop.action(action, data)
         if action == "run_now":
             self.start_scan()
             return self.app_status()
@@ -636,12 +637,12 @@ class App:
     def scan_status(self) -> dict:
         running = self.scan_proc is not None and self.scan_proc.poll() is None
         tail = ""
-        for name in (SCAN_LOG, "watch.log"):
-            p = home() / name
-            if p.exists():
-                tail = "\n".join(p.read_text(encoding="utf-8", errors="replace").splitlines()[-12:])
-                if tail:
-                    break
+        logs = sorted((home() / n for n in (SCAN_LOG, "watch.log", "app.log") if (home() / n).exists()),
+                      key=lambda p: p.stat().st_mtime, reverse=True)          # самый свежий журнал — там текущая работа
+        for p in logs:
+            tail = "\n".join(p.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
+            if tail:
+                break
         return {"running": running, "started": self.scan_started, "log": tail,
                 "wait": max(0, int(self.scan_started + MIN_SCAN_GAP - time.time())) if not running else 0}
 

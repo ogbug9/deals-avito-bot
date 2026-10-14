@@ -9,7 +9,7 @@ import re
 import sys
 import time
 
-from . import db, sources
+from . import db, sources, progress
 from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv, with_page
 from .config import Config
 from .notifier import Notifier, fmt_rub
@@ -65,12 +65,15 @@ def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_aler
     rc = 0
     info = info if info is not None else {}
     info.update({"captcha": 0, "blocked": 0, "errors": 0, "empty": 0, "pages": 0, "seen": 0, "new": 0, "candidates": 0})
+    if not progress.read().get("job"):
+        progress.start("scan", "Обход источников", of=len(todo))
     with _collector(cfg) as col:
         col.on_captcha = on_captcha
         col.limiter = limiter
         for n, (name, url, pages, category, region) in enumerate(todo):
             if should_stop() or (target and _active(conn) >= target):
                 break
+            progress.set(source=name, step=n + 1, of=len(todo), new=info["new"], candidates=info["candidates"])
             if n:
                 time.sleep(random.uniform(cfg.delay_sec * 2, cfg.delay_sec * 4))   # пауза между разделами
             started, cap0 = time.time(), col.captchas
@@ -80,6 +83,7 @@ def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_aler
                 _log_cycle(conn, started, name, captcha=col.captchas - cap0, blocked=1, error=str(e))
                 print(f"⛔ {e}. Снизьте частоту, смените IP/прокси или используйте --csv.", file=sys.stderr, flush=True)
                 info.update(captcha=col.captchas, blocked=1, pages=col.requests)
+                progress.done("Авито ограничил доступ — обход остановлен")
                 return 3   # дальше по списку идти бессмысленно — только продлим блокировку
             except FetchError as e:
                 _log_cycle(conn, started, name, captcha=col.captchas - cap0, error=str(e))
@@ -99,10 +103,12 @@ def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_aler
             def check(u):
                 time.sleep(cfg.page_pause(random))
                 return col.check_listing(u)
+            progress.set(source="Карточки лотов: полное описание и проверка «живо ли»", step=len(todo), of=len(todo))
             res = recheck(conn, cfg, check, notifier=notifier)
             if res["checked"]:
                 print(f"Карточки: {json.dumps(res, ensure_ascii=False)}", flush=True)
         info.update(captcha=col.captchas, pages=col.requests)
+    progress.done(f"страниц {info['pages']}, новых {info['new']}, кандидатов {info['candidates']}")
     return rc
 
 
@@ -142,6 +148,7 @@ def run_due(sched, limiter, env_file: str, notifier_factory, on_captcha=None, sh
     if kind is None:
         return None
     todo = source_plan(cfg) if kind == "full" else light_plan(cfg)
+    progress.start(kind, "Полный обход" if kind == "full" else "Лёгкий цикл: свежие объявления", of=len(todo))
     if not todo:                                   # приоритетных источников нет — лёгкий цикл пропускаем
         sched.done(kind, False)
         return kind, 0, {}
@@ -196,7 +203,7 @@ FAST_PACE = 0.5      # --fast: паузы между страницами вдв
 
 
 def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, cats: list[str] | None = None,
-                         fast: bool = False) -> int:
+                         fast: bool = False, should_stop=lambda: False, on_captcha=None) -> int:
     """Добрать каждую категорию до target объявлений. Идёт вглубь выдачи постранично и сохраняет после каждой
     страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места.
     fast — паузы вдвое короче, пока Авито не попросит капчу; дальше до конца запуска обычные."""
@@ -206,12 +213,19 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
     print("Сейчас в базе: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
                                          for c in dict.fromkeys(s.category for s in srcs)), flush=True)
     rc = 0
+    counts = lambda: {c: _in_category(conn, c) for c in dict.fromkeys(s.category for s in srcs)}
+    progress.start("collect", "Добор по разделам", target=target, cats=counts())
     with _collector(cfg) as col:
+        col.on_captcha = on_captcha
         first = True
         for s, have in plan:
             page = max(1, have // 50)          # с небольшим нахлёстом: за время между обходами выдача сдвигается
             empty = 0
             while _in_category(conn, s.category) < target and page <= max_page:
+                if should_stop():
+                    progress.done("остановлено")
+                    return rc
+                progress.set(source=s.name, page=page, cats=counts())
                 if not first:
                     time.sleep(cfg.page_pause(random) * pace)
                 first = False
@@ -222,6 +236,7 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
                     _log_cycle(conn, started, s.name, captcha=col.captchas - cap0, blocked=1, error=str(e))
                     print(f"⛔ {e}. Остановился на «{s.name}», стр. {page}. Запустите команду ещё раз позже — продолжит.",
                           file=sys.stderr, flush=True)
+                    progress.done(f"Авито ограничил доступ на «{s.name}», стр. {page} — повторите позже, продолжит с того же места")
                     return 3
                 except FetchError as e:
                     _log_cycle(conn, started, s.name, error=str(e))
@@ -244,6 +259,8 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
                 page += 1
     print("Итог: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
                                 for c in dict.fromkeys(s.category for s in srcs)), flush=True)
+    progress.set(cats=counts())
+    progress.done("добор закончен")
     return rc
 
 

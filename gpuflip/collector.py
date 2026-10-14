@@ -303,7 +303,11 @@ class AvitoCollector:
         return ITEM_MARK in self.last_html
 
     def fetch(self, url: str) -> str:
+        from . import progress
+        q = dict(parse_qsl(urlparse(url).query))
+        progress.set(page=int(q.get("p", 1) or 1), loading=True)
         html = self._fetch(url)
+        progress.set(loading=False, captcha=False, pages_done=self.requests)
         slug = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
         if slug and slug not in urlparse(self._page.url).path:
             # устаревший код категории Авито молча меняет на родительский раздел — чужие объявления в базу не берём
@@ -340,6 +344,8 @@ class AvitoCollector:
                     self.captchas += 1
                     try:
                         self._page.bring_to_front()   # окно Chrome — на передний план, капчу проходит человек
+                        from . import progress
+                        progress.set(captcha=True, captcha_since=time.time())
                         if self.on_captcha:
                             self.on_captcha()
                     except Exception:

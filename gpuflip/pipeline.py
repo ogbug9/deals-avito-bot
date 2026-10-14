@@ -173,8 +173,10 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
     Два прохода: сначала позиции, потом оценки — чтобы медианы считались по уже обновлённым позициям.
     Алерты не шлются, счётчики режимов не пишутся.
     """
+    from . import progress
     from .collector import RawListing
     now = time.time() if now is None else now
+    progress.start("analysis", "Анализ базы: пересчёт оценок, разбор ПК, линейки")
     groups: dict[tuple, list] = {}
     for r in conn.execute("SELECT * FROM listings WHERE status='active'"):
         l = RawListing(id=r["id"], title=r["title"] or "", price=r["price"] or 0.0, url=r["url"] or "",
@@ -188,6 +190,7 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
             for l in items:        # last_seen не трогаем: пересчёт не означает, что объявление снова видели
                 seen = conn.execute("SELECT last_seen FROM listings WHERE id=?", (l.id,)).fetchone()[0]
                 l._last_seen = seen
+            progress.set(source=f"{'оценки' if final else 'позиции'}: {category or 'без раздела'}")
             st = process(conn, cfg, items, source, False, now=now, category=category, region=region,
                          record_alerts=False, save_stats=False)
             for l in items:
@@ -204,6 +207,7 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
                         t["rejected"][k] = t["rejected"].get(k, 0) + v
     total["gone"] = analyze_gone(conn, cfg, now)
     conn.commit()
+    progress.done(f"пересчитано {total['listings']}, кандидатов {total['candidates']}")
     return total
 
 

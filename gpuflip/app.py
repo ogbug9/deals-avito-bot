@@ -71,6 +71,8 @@ class Worker(threading.Thread):
         self.state, self.last_start, self.last_end = "idle", 0.0, 0.0
         self.last_analysis = time.time() - ANALYSIS_EVERY + 600      # первый пересчёт — через 10 минут после старта
         self.last_rc: int | None = None
+        self.job: dict | None = None              # задание из интерфейса: добор разделов
+        self._stop_job = threading.Event()
         self.last_kind, self.last_info, self.last_error = "", {}, ""
         try:                                      # расписание и счётчик запросов — с прошлого запуска
             from .cli import restore_schedule
@@ -93,6 +95,20 @@ class Worker(threading.Thread):
 
     def stop(self) -> None:
         self._halt.set()
+        self._wake.set()
+
+    def collect(self, cats: list[str], target: int) -> None:
+        """Добор выбранных разделов до target объявлений — следующим заданием, вместо обычного обхода."""
+        self._stop_job.clear()
+        self.job = {"kind": "collect", "cats": cats, "target": max(50, min(5000, int(target)))}
+        self._wake.set()
+
+    def stop_job(self) -> None:
+        self._stop_job.set()
+        self.job = None
+
+    def analyse_now(self) -> None:
+        self.last_analysis = 0
         self._wake.set()
 
     @property
@@ -136,6 +152,9 @@ class Worker(threading.Thread):
                 _log(f"копия базы не сделана: {type(e).__name__}: {e}")
             if time.time() - self.last_analysis >= ANALYSIS_EVERY and not self._halt.is_set():
                 self._analyse()
+            if self.job and not self._halt.is_set():
+                self._run_job()
+                continue
             if self.paused or self.sched.due() is None:
                 self._wake.wait(timeout=5)
                 self._wake.clear()
@@ -154,6 +173,26 @@ class Worker(threading.Thread):
                 self.sched.done(self.last_kind or "full", True)
                 _log(f"ошибка обхода: {self.last_error}")
             self.last_end, self.state = time.time(), "idle"
+
+    def _run_job(self) -> None:
+        from .cli import collect_per_category
+        job, self.job = self.job, None
+        self.state, self.last_start, self.last_kind, self.last_error = "running", time.time(), "collect", ""
+        try:
+            cfg = Config.load(self.env_file)
+            conn = db.connect(cfg.db_path)
+            try:
+                db.backup(cfg.db_path)
+                self.last_rc = collect_per_category(conn, cfg, job["target"], cats=job["cats"] or None,
+                                                    should_stop=lambda: self._halt.is_set() or self._stop_job.is_set(),
+                                                    on_captcha=self._on_captcha)
+            finally:
+                conn.close()
+            db.rolling_backup(cfg.db_path, "collect", keep=5, every=0)
+        except Exception as e:
+            self.last_rc, self.last_error = 1, f"{type(e).__name__}: {e}"
+            _log(f"добор не удался: {self.last_error}")
+        self.last_end, self.state = time.time(), "idle"
 
     def _analyse(self) -> None:
         """Пересчёт всей базы текущими правилами без сети: разбор ПК, линейки, похожие ПК, ушедшие лоты.
@@ -300,7 +339,17 @@ class Desktop:
         self.quitting = False
 
     # вызывается из HTTP-обработчика (ui.App.app_action)
-    def action(self, name: str) -> dict:
+    def action(self, name: str, data: dict | None = None) -> dict:
+        data = data or {}
+        if name == "collect":
+            self.worker.collect([c for c in data.get("cats") or [] if isinstance(c, str)], int(data.get("target") or 1000))
+            return self.status()
+        if name == "stop_job":
+            self.worker.stop_job()
+            return self.status()
+        if name == "analyse":
+            self.worker.analyse_now()
+            return self.status()
         if name == "show":
             self.show()
         elif name == "pause":
@@ -324,7 +373,9 @@ class Desktop:
         return self.status()
 
     def status(self) -> dict:
+        from . import progress
         return {"desktop": True, **self.worker.status(), "status_line": self.worker.status_line(),
+                "progress": progress.read(), "job_pending": bool(self.worker.job),
                 "autostart": autostart_enabled(), "home": str(home())}
 
     def show(self) -> None:
