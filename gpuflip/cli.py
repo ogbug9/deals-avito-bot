@@ -13,6 +13,7 @@ from . import db, sources, progress
 from .collector import AvitoCollector, BlockedError, FetchError, parse_search_html, read_csv, with_page
 from .config import Config
 from .notifier import Notifier, fmt_rub
+from .schedule import RateLimiter, restore_times
 from pathlib import Path
 
 from . import modes, wordlists
@@ -137,6 +138,17 @@ def restore_schedule(sched, limiter, db_path: str) -> None:
         conn.close()
 
 
+def _restore_limit(conn, limiter) -> None:
+    """Добор учитывает загрузки предыдущих запусков за час; меняет только счётчик времён, остальное расписание не трогает."""
+    restore_times(limiter, (db.get_setting(conn, "sched.state") or {}).get("times", []))
+
+
+def _save_limit(conn, limiter) -> None:
+    state = db.get_setting(conn, "sched.state") or {}
+    state["times"] = list(limiter._times)
+    db.set_setting(conn, "sched.state", state)
+
+
 def run_due(sched, limiter, env_file: str, notifier_factory, on_captcha=None, should_stop=lambda: False,
             log=print, full_interval: float = 0.0) -> tuple[str, int, dict] | None:
     """Выполнить цикл, которому пришло время (полный или лёгкий). None — пока рано."""
@@ -203,7 +215,22 @@ FAST_PACE = 0.5      # --fast: паузы между страницами вдв
 
 
 def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, cats: list[str] | None = None,
-                         fast: bool = False, should_stop=lambda: False, on_captcha=None) -> int:
+                         fast: bool = False, should_stop=lambda: False, on_captcha=None,
+                         limiter: RateLimiter | None = None) -> int:
+    """limiter — общий счётчик запросов (приложение передаёт свой). Без него счёт берётся из базы
+    и сохраняется обратно, чтобы два запуска подряд не превышали лимит в час."""
+    if limiter is not None:
+        return _collect_sections(conn, cfg, target, max_page, cats, fast, should_stop, on_captcha, limiter)
+    limiter = RateLimiter(cfg.max_requests_per_hour)
+    _restore_limit(conn, limiter)
+    try:
+        return _collect_sections(conn, cfg, target, max_page, cats, fast, should_stop, on_captcha, limiter)
+    finally:
+        _save_limit(conn, limiter)
+
+
+def _collect_sections(conn, cfg: Config, target: int, max_page: int, cats: list[str] | None, fast: bool,
+                      should_stop, on_captcha, limiter: RateLimiter) -> int:
     """Добрать каждую категорию до target объявлений. Идёт вглубь выдачи постранично и сохраняет после каждой
     страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места.
     fast — паузы вдвое короче, пока Авито не попросит капчу; дальше до конца запуска обычные."""
@@ -217,6 +244,7 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
     progress.start("collect", "Добор по разделам", target=target, cats=counts())
     with _collector(cfg) as col:
         col.on_captcha = on_captcha
+        col.limiter = limiter                  # тот же потолок в час, что у лёгкого цикла
         first = True
         for s, have in plan:
             page = max(1, have // 50)          # с небольшим нахлёстом: за время между обходами выдача сдвигается

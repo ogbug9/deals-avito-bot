@@ -205,7 +205,7 @@ class Worker(threading.Thread):
                 db.backup(cfg.db_path)
                 self.last_rc = collect_per_category(conn, cfg, job["target"], cats=job["cats"] or None,
                                                     should_stop=lambda: self._halt.is_set() or self._stop_job.is_set(),
-                                                    on_captcha=self._on_captcha)
+                                                    on_captcha=self._on_captcha, limiter=self.limiter)
             finally:
                 conn.close()
             db.rolling_backup(cfg.db_path, "collect", keep=5, every=0)

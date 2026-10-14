@@ -191,3 +191,64 @@ def test_page_pause_range_from_env(tmp_path):
     pauses = [cfg.page_pause() for _ in range(200)]
     assert 20 <= min(pauses) and max(pauses) <= 25
     assert Config(delay_sec=15).page_pause.__self__.delay_max_sec == 0 and 15 <= Config(delay_sec=15).page_pause() <= 30
+
+
+def test_collect_respects_hourly_request_limit(monkeypatch, tmp_path):
+    """Добор страниц тоже идёт через общий потолок MAX_REQUESTS_PER_HOUR (как лёгкий цикл), иначе за час
+    уйдёт больше страниц, чем разрешено, и Авито быстрее даст капчу или 429."""
+    from gpuflip import sources
+    made = []
+
+    class FakeCol:
+        captchas = 0
+        limiter = None
+
+        def __enter__(self):
+            made.append(self)
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def fetch(self, url):
+            return "<html></html>"          # пустая выдача — добор сразу закончится
+
+    monkeypatch.setattr(cli, "_collector", lambda cfg: FakeCol())
+    monkeypatch.setattr(sources, "load", lambda: [sources.Source("ЦП", "protsessory", "moskva")])
+    conn = db.connect(str(tmp_path / "f.db"))
+    cli.collect_per_category(conn, Config(max_requests_per_hour=30), 10_000, max_page=5)
+    limiter = made[0].limiter
+    assert isinstance(limiter, RateLimiter) and limiter.max_per_hour == 30
+
+
+def test_collect_shares_hourly_limit_across_runs(monkeypatch, tmp_path):
+    """Счёт запросов за час переживает запуски: добор берёт времена из sched.state и сохраняет обратно,
+    не трогая остальные ключи расписания (factor и т.д.)."""
+    import time
+    from gpuflip import sources
+    made = []
+
+    class FakeCol:
+        captchas = 0
+        limiter = None
+
+        def __enter__(self):
+            made.append(self)
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def fetch(self, url):
+            self.limiter.acquire()          # как настоящий коллектор: каждая загрузка идёт через лимит
+            return "<html></html>"
+
+    monkeypatch.setattr(cli, "_collector", lambda cfg: FakeCol())
+    monkeypatch.setattr(sources, "load", lambda: [sources.Source("ЦП", "protsessory", "moskva")])
+    conn = db.connect(str(tmp_path / "f.db"))
+    now = time.time()
+    db.set_setting(conn, "sched.state", {"times": [now - 100, now - 50], "factor": 2.0})
+    cli.collect_per_category(conn, Config(max_requests_per_hour=3), 10_000, max_page=5)
+    state = db.get_setting(conn, "sched.state")
+    assert len(state["times"]) == 3         # две загрузки прошлого запуска + одна страница сейчас
+    assert state["factor"] == 2.0           # расписание не затёрто

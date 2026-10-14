@@ -129,13 +129,19 @@ def dump_state(sched: Scheduler, limiter: RateLimiter) -> dict:
             "troubles": sched.throttle.troubles, "next_full_at": sched.next_full_at, "next_light_at": sched.next_light_at}
 
 
+def restore_times(limiter: RateLimiter, times: list) -> None:
+    """Вернуть в лимит времена загрузок за последний час (старше часа и из будущего отбрасываются)."""
+    now = limiter._clock()
+    limiter._times = deque(sorted(t for t in times if isinstance(t, (int, float)) and now - 3600 < t <= now))
+
+
 def load_state(sched: Scheduler, limiter: RateLimiter, state: dict) -> None:
     """Вернуть состояние после перезапуска. Полный обход не начнётся раньше назначенного времени,
     а запросы за последний час продолжают считаться."""
     if not state:
         return
     now = limiter._clock()
-    limiter._times = deque(sorted(t for t in state.get("times", []) if isinstance(t, (int, float)) and now - 3600 < t <= now))
+    restore_times(limiter, state.get("times", []))
     sched.throttle.factor = min(sched.throttle.cap, max(1.0, float(state.get("factor", 1.0))))
     sched.throttle.clean = int(state.get("clean", 0))
     sched.throttle.troubles = int(state.get("troubles", 0))
