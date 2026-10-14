@@ -183,3 +183,9 @@ def test_preorder_and_crash_wording_from_live_base():
     assert p.ok and "prepay" in p.flags                      # «под заказ» = деньги вперёд, в алерты не идёт
     assert parse_listing("GTX 1080 Ti 11Gb", "при скачках частот вылетало, плохо банкам памяти").skip_reason == "defective"
     assert parse_listing("GTX 1080 Ti 11Gb", "работает стабильно, без вылетов и зависаний").ok
+
+
+def test_no_picture_shorthand_is_a_defect():
+    assert parse_listing("Нет изо gtx 1050ti msi oc", "").skip_reason == "defective"
+    assert parse_listing("GTX 1060 6GB", "вентиляторы крутят, нет картинки").skip_reason == "defective"
+    assert parse_listing("GTX 1060 6GB", "рабочая, изображение чёткое").ok
