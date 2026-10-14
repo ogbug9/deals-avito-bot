@@ -82,10 +82,17 @@ def test_disk_rejects_accessories():
 
 def test_mb():
     p = parse_mb("Материнская плата Gigabyte B550M Aorus Elite")
-    assert p.key == "MB AM4 B550 mATX" and p.fine_key == "MB AM4 B550 mATX Gigabyte"
+    assert p.key == "MB AM4 B550 mATX (средняя)" and p.fine_key == "MB AM4 B550 mATX Gigabyte (средняя)"
+    # одна и та же «Asus X870»: TUF и ROG Crosshair в разных точных позициях — цены у них отличаются вдвое
+    assert parse_mb("Материнские Платы asus TUF gaming X870-plus wifi").fine_key == "MB AM5 X870 ATX Asus (базовая)"
+    assert parse_mb("Asus ROG Strix X870-A Gaming WiFi").fine_key == "MB AM5 X870 ATX Asus (средняя)"
+    assert parse_mb("Asus ROG Crosshair X870E Hero").fine_key == "MB AM5 X870 ATX Asus (топ)"
+    assert parse_mb("MSI MEG X870E Godlike").fine_key.endswith("(топ)")
+    assert parse_mb("Asus X870 материнская плата").fine_key == "MB AM5 X870 ATX Asus"      # серия не названа
     assert parse_mb("ASRock B550M-ITX/AC").key == "MB AM4 B550 ITX"
-    assert parse_mb("Asus TUF B850-Plus WiFi").key == "MB AM5 B850 ATX"
-    assert parse_mb("MSI PRO H610M-E").key == "MB LGA1700 H610 mATX"
+    assert parse_mb("Asus TUF B850-Plus WiFi").key == "MB AM5 B850 ATX (базовая)"
+    assert parse_mb("MSI PRO H610M-E").key == "MB LGA1700 H610 mATX (базовая)"
+    assert parse_mb("Материнская плата B450M, сокет AM4", "в комплекте Windows 11 Pro, коробка").key == "MB AM4 B450 mATX"
     assert parse_mb("Комплект B450 + Ryzen 5 3600") is None
 
 
@@ -119,3 +126,8 @@ def test_pc_absent_and_rejects():
 def test_pc_ambiguous_gpu_is_unknown():
     b = parse_pc("Игровой пк RTX 5080 / 5070 + Ryzen 9 9950X3D")
     assert "gpu" in b.unknown and "CPU Ryzen 9 9950X3D" in keys(b)
+
+
+def test_fast_ddr5_kits_are_in_the_fast_tier():
+    assert parse_ram("DDR5 Patriot Viper Venom 7400 MT/s 2x16gb").key == "RAM DDR5 32GB 6600+"
+    assert parse_ram("Gskill trident z ddr5 32gb 7800mhz cl36").key == "RAM DDR5 32GB 6600+"

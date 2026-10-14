@@ -137,8 +137,8 @@ def test_motherboards_grouped_by_socket_chipset_form(conn):
     process(conn, Config(), mbs + big, "mb", False, now=NOW, category="materinskie_platy", region="moskva")
     st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5"), L(681, 4700, "Asus Prime B760M-K")],
                 category="materinskie_platy", src="mb")
-    assert db.market_stats(conn, "MB LGA1700 B760 mATX", None, NOW + 60).n == 14
-    assert db.market_stats(conn, "MB LGA1700 B760 ATX", None, NOW + 60).n == 12
+    assert db.market_stats(conn, "MB LGA1700 B760 mATX (базовая)", None, NOW + 60).n == 14
+    assert db.market_stats(conn, "MB LGA1700 B760 ATX (средняя)", None, NOW + 60).n == 12
     # Gigabyte: точная позиция (с брендом) набрала 12 объявлений → доверие высокое; Asus: общая → среднее
     assert cand(conn, 680, "categories")["confidence"] == "high"
     assert "MB LGA1700 B760 mATX Gigabyte" in cand(conn, 680, "categories")["reason"]

@@ -111,6 +111,8 @@ def test_new_or_used_guess():
     assert not is_new("GTX 1060 6GB", "Обслужена: новая термопаста и новые термопрокладки. Перешёл на новую карту.")
     assert not is_new("RX 580 8GB", "Продаю в связи с покупкой новой. Стоит новый кулер.")
     assert is_new("RTX 5050", "Абсолютно новая, чек и гарантия")
+    assert is_new("Память DDR5 32GB Kingston Fury Beast Black RTL Gaming KF556C40BBK2-32", "")   # магазинная коробка
+    assert not is_new("Оперативная память ddr5 32gb", "Тайминги 40-40-40, controller")
     assert not is_new("RTX 3070 8GB", "Отличное состояние, не вскрывалась")
 
 

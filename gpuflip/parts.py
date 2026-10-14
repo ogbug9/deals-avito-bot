@@ -41,7 +41,7 @@ _DDR_RE = re.compile(r"(?<![a-zа-я])(?:ddr|ддр)[\s\-]?([2345])(l)?")   # н
 _KIT_RE = re.compile(r"(\d)\s*(?:x|х|\*|шт\.?\s*по|планк\w*\s*по|модул\w*\s*по)\s*(\d{1,3})\s*(?:gb|гб|g\b|г\b)?")
 _KIT_REV_RE = re.compile(r"(\d{1,3})\s*(?:gb|гб)\s*(?:x|х|\*)\s*(\d)(?!\d)")
 _GB_RE = re.compile(r"(?<![0-9.,])(\d{1,3})\s*(?:gb|гб|g(?![a-zа-я])|гиг)")
-_FREQ_RE = re.compile(r"(?<!\d)(1333|1600|1866|2133|2400|2666|2933|3000|3200|3466|3600|3733|4000|4400|4800|5200|5600|6000|6200|6400|6600|6800|7200|8000)(?!\d)")
+_FREQ_RE = re.compile(r"(?<!\d)(1333|1600|1866|2133|2400|2666|2933|3000|3200|3466|3600|3733|4000|4400|4800|5200|5600|6000|6200|6400|6600|6800|7200|7400|7600|7800|8000|8200|8400)(?!\d)")
 _SODIMM_RE = re.compile(r"so-?dimm|sodimm|для ноутбук|ноутбучн|для ноута")
 _ECC_RE = re.compile(r"\becc\b|\breg\b|registered|rdimm|lrdimm|серверн")
 RAM_SIZES = {1, 2, 4, 8, 16, 32, 48, 64, 96, 128}
@@ -267,6 +267,36 @@ _CHIPSETS = {"a320", "a520", "a620", "b350", "b450", "b550", "b650", "b850", "x3
              "z77", "z87", "z97", "z170", "z270", "z370", "z390", "z490", "z590", "z690", "z790", "z890", "x79", "x99", "x299"}
 
 
+# Линейка платы: у одного бренда и чипсета ROG Hero и TUF отличаются по цене вдвое — в одну точную позицию их не мешаем.
+_MB_LINES = (
+    ("топ", re.compile(r"maximus|crosshair|(?<![a-z])hero(?![a-z])|extreme|xtreme|formula|(?<![a-z])apex(?![a-z])|aorus\s*master|"
+                       r"taichi|godlike|(?<![a-z])meg(?![a-z])|(?<![a-z])ace(?![a-z])|unify|(?<![a-z])aqua(?![a-z])")),
+    ("средняя", re.compile(r"strix|(?<![a-z])rog(?![a-z])|aorus|steel\s*legend|lightning|(?<![a-z])mpg(?![a-z])|carbon|"
+                           r"(?<![a-z])edge(?![a-z])|tomahawk|proart|(?<![a-z])nova(?![a-z])|riptide")),
+    ("базовая", re.compile(r"prime|(?<![a-z])tuf(?![a-z])|(?<![a-z])pro(?![a-z])|gaming\s*x|eagle|ds3h|(?<![a-z])ud(?![a-z])|"
+                           r"hdv|phantom|gaming\s*plus|(?<![a-z])plus(?![a-z])|(?<![a-z])elite(?![a-z])|(?<![a-z])h[dv]s(?![a-z])")),
+)
+
+
+def mb_line(text: str) -> str:
+    """«топ» / «средняя» / «базовая» по названию серии, '' — не понять."""
+    for name, rx in _MB_LINES:
+        if rx.search(text):
+            return name
+    return ""
+
+
+def mb_line_near(text: str, chipset: str) -> str:
+    """Линейка рядом с чипсетом: в описании ПК «Windows 11 Pro» или «Samsung 980 Pro» к плате не относятся."""
+    i = text.find(chipset.lower())
+    return mb_line(text[max(0, i - 30):i + 45]) if i >= 0 else ""
+
+
+def mb_key(pos_key: str, line: str) -> str:
+    """Позиция платы: сокет + чипсет + форм-фактор и, если понятна, линейка — базовые сравниваются с базовыми."""
+    return f"{pos_key} ({line})" if line else pos_key
+
+
 def parse_mb(title: str, description: str = "") -> Part | None:
     t = _low(title)
     if re.search(r"комплект|связк|набор|\+\s*(?:проц|озу|памят|cpu)|с процессор", t):
@@ -275,7 +305,9 @@ def parse_mb(title: str, description: str = "") -> Part | None:
     if not pos:
         return None
     brand = _brand(_low(title, description), _MB_BRANDS)
-    return Part("mb", pos[0], brand=brand, fine_key=f"{pos[0]} {brand.title()}" if brand else "", detail={"chipset": pos[1]})
+    line = mb_line(t) or mb_line_near(_low(description), pos[1])
+    fine = f"{pos[0]} {brand.title()}" + (f" ({line})" if line else "") if brand else ""
+    return Part("mb", mb_key(pos[0], line), brand=brand, fine_key=fine, detail={"chipset": pos[1], "line": line or None})
 
 
 PARSERS = {
@@ -346,7 +378,7 @@ def parse_pc(title: str, description: str = "") -> Bundle:
         ram = _pc_ram(full)
         b.parts.append(ram) if ram else b.unknown.append("ram")
     mb = mb_position(full)
-    b.parts.append(Part("mb", mb[0])) if mb else b.unknown.append("mb")
+    b.parts.append(Part("mb", mb_key(mb[0], mb_line_near(full, mb[1])))) if mb else b.unknown.append("mb")
     if "psu" not in b.absent:
         psu = _pc_psu(full)
         b.parts.append(psu) if psu else b.unknown.append("psu")
