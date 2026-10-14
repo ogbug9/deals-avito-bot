@@ -16,7 +16,7 @@ from . import analogs, db, modes
 MAX_LOTS = 6
 FLAG_RU = {"mining": "майнинг", "untested": "не тестировалась", "prepay": "предоплата", "repaired": "был ремонт",
            "flashed": "прошивка", "no_testing_allowed": "без проверки", "issues": "есть нюансы",
-           "no_warranty": "без гарантии", "model_from_desc": "модель не из заголовка", "vram_mismatch": "память не как у модели", "reseller": "перекупщик / дубли"}
+           "no_warranty": "без гарантии", "model_from_desc": "модель не из заголовка", "vram_mismatch": "память не как у модели", "obfuscated": "текст замаскирован", "no_outputs": "нет видеовыходов", "reseller": "перекупщик / дубли"}
 SOURCE_RU = {"title": "из заголовка", "description": "из описания", "fuzzy": "из опечатки"}
 
 

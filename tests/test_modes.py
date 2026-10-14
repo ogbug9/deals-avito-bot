@@ -45,7 +45,7 @@ def cand(conn, i, mode):
 
 # --- классика ---
 def test_market_candidate_has_reason_and_alert_shows_mode(conn):
-    st, out = run(conn, [L(500, 19000)])
+    st, out = run(conn, [L(500, 19000, desc="Рабочая, проверка на месте")])     # без описания доверие было бы «среднее»
     c = cand(conn, 500, "market")
     assert tags(conn, 500) == {"market"} and c["est_profit"] > 5000 and c["confidence"] == "high"
     assert "RTX 3070" in c["reason"] and "n=12" in c["reason"]
@@ -135,7 +135,7 @@ def test_motherboards_grouped_by_socket_chipset_form(conn):
     mbs = [L(660 + i, 9000 + (i % 3) * 200, "Материнская плата Gigabyte B760M DS3H") for i in range(12)]
     big = [L(690 + i, 19000, "Материнская плата MSI MAG B760 Tomahawk") for i in range(12)]      # ATX — другой рынок
     process(conn, Config(), mbs + big, "mb", False, now=NOW, category="materinskie_platy", region="moskva")
-    st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5"), L(681, 4700, "Asus Prime B760M-K")],
+    st, _ = run(conn, [L(680, 4700, "Gigabyte B760M DS3H DDR5", "Рабочая, снята с ПК"), L(681, 4700, "Asus Prime B760M-K", "Рабочая")],
                 category="materinskie_platy", src="mb")
     assert db.market_stats(conn, "MB LGA1700 B760 mATX (базовая)", None, NOW + 60).n == 14
     assert db.market_stats(conn, "MB LGA1700 B760 ATX (средняя)", None, NOW + 60).n == 12
@@ -251,3 +251,13 @@ def test_modes_and_regions_from_env(tmp_path, monkeypatch):
     assert all(pages == c.region_max_pages for _, _, pages, _, reg in plan if reg in ("kazan", "sankt-peterburg"))
     c.mode_regional = False
     assert not [1 for *_, reg in source_plan(c) if reg == "kazan"]
+
+
+def test_confidence_drops_when_text_has_risk_or_is_empty():
+    conn = db.connect(":memory:")
+    process(conn, Config(), gpu_market(32), "msk", False, now=NOW, category="videokarty", region="moskva")
+    run(conn, [L(950, 19000, desc="отличная карта, проверка на месте"), L(951, 19000, desc=""),
+               L(952, 19000, desc="не тестировал, продаю как есть")])
+    conf = {r[0]: r[1] for r in conn.execute("SELECT id, confidence FROM listings WHERE id IN ('950','951','952')")}
+    assert conf["950"] == "high" and conf["951"] == "medium" and conf.get("952") in ("medium", None)
+    assert "описания нет" in conn.execute("SELECT reason FROM listings WHERE id='951'").fetchone()[0]

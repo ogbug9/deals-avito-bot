@@ -55,7 +55,7 @@ def test_flags():
 ])
 def test_negated_defects_are_fine(desc):
     p = parse_listing("Видеокарта RTX 3070 8GB", desc)
-    assert p.ok and not p.flags
+    assert p.ok and set(p.flags) <= {"obfuscated"}        # маскировка латиницей — отдельный риск, не брак
 
 
 @pytest.mark.parametrize("desc", [
@@ -189,3 +189,16 @@ def test_no_picture_shorthand_is_a_defect():
     assert parse_listing("Нет изо gtx 1050ti msi oc", "").skip_reason == "defective"
     assert parse_listing("GTX 1060 6GB", "вентиляторы крутят, нет картинки").skip_reason == "defective"
     assert parse_listing("GTX 1060 6GB", "рабочая, изображение чёткое").ok
+
+
+def test_problems_found_in_the_14_10_export():
+    """Кандидаты из выгрузки, которые оказались неисправными или подозрительными."""
+    assert parse_listing("Видеокарта gtx 1080 8gb", "Продаю свою видео карту, причина продажи слетел Bios на видео карте.").skip_reason == "defective"
+    assert parse_listing("Gigabyte Aorus Rtx 3060 Ti", "в стресс-тестах наблюдались повышенные температуры").skip_reason == "defective"
+    assert "no_outputs" in parse_listing("Видеокарта gtx 1060 6gb", "нет видеовыходов, работает от материнки").flags
+    assert "untested" in parse_listing("Видеокарта 1080 ti", "работоспособность проверить не могу, продаю как есть").flags
+    masked = parse_listing("Видеокарта RTX 3080 turbo 10GB", "B пpодaже вeликолeпная и производитeльная видeокарта RTX 3080 Turbо")
+    assert "obfuscated" in masked.flags
+    assert "obfuscated" not in parse_listing("Видеокарта RTX 3080 MSI Gaming X Trio", "Продаю, всё работает, MSI Afterburner").flags
+    assert parse_listing("Видеокарта rx580 8gb 2048sp").key == "RX 580 2048SP"
+    assert parse_listing("Видеокарта RX 580 8GB Sapphire Nitro").key == "RX 580 8GB"

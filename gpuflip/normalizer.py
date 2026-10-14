@@ -264,9 +264,21 @@ def is_new(title: str, description: str = "") -> bool:
     return bool(_NEW_RE.search(text))
 
 
+_MIXED_RE = re.compile(r"(?=[a-zа-яё]*[a-z])(?=[a-zа-яё]*[а-яё])[a-zа-яё]{3,}")
+OBFUSCATED = 0.25     # латинские буквы внутри русских слов — так прячут текст от автопоиска и модерации
+
+
+def obfuscated(text: str) -> bool:
+    """Три и больше слов вперемешку латиницей и кириллицей («B пpодaже вeликолeпная») — частый приём перекупов и мошенников."""
+    return len(_MIXED_RE.findall((text or "").lower())) >= 3
+
+
 def risk_flags(text: str) -> dict[str, float]:
     chk = _clean_for_flags((text or "").lower().replace("ё", "е"))
-    return {name: prob for name, rx, prob in _words("risk") if rx.search(chk)}
+    out = {name: prob for name, rx, prob in _words("risk") if rx.search(chk)}
+    if obfuscated(text):
+        out["obfuscated"] = OBFUSCATED
+    return out
 
 
 _NO_BARGAIN_RE = re.compile(r"без торг\w*|торг\w* (?:нет|неуместен|не уместен|не предлагать|не будет)|не торгу\w+|"
@@ -337,6 +349,10 @@ def parse_listing(title: str, description: str = "", assume_gpu: bool = False) -
     for name, rx, prob in _words("risk"):
         if rx.search(chk):
             p.flags[name] = prob
+    if obfuscated(f"{title} {description}"):
+        p.flags["obfuscated"] = OBFUSCATED
+    if p.key == "RX 580 8GB" and re.search(r"2048\s*sp|2048", full):
+        p.key = "RX 580 2048SP"           # урезанная китайская версия: дешевле обычной RX 580, свой рынок
     if source != "title":
         p.flags["model_from_desc"] = 0.05
     stated = None if p.mobile else _vram_near(t, p.model)      # только из названия: в описании «16 ГБ» чаще про ОЗУ

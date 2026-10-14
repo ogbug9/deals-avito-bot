@@ -150,6 +150,12 @@ def evaluate(conn, cfg: Config, row, sc: Score | None, ms: db.MarketStats | None
                 conf, coarse = "medium", "; позиция без учёта бренда — сверьте вручную"
             if row["reseller"]:
                 coarse += "; у продавца много одинаковых лотов"
+            # «высокое» доверие — про лот, а не только про данные: риск в тексте или пустое описание его снижают
+            if conf == "high" and any(f != "model_from_desc" for f in flags):
+                conf = "medium"
+            if not (row["description"] or "").strip():
+                conf = "medium" if conf == "high" else conf
+                coarse += "; описания нет — состояние неизвестно"
             reason = (f"{how[source]} — " if mode == "badtext" else "") + \
                      f"{base}{unit}; торг до {fmt_rub(sc.target_buy)}{coarse}{_risk_note(flags)}"
             out.append(Cand(mode, sc.net, sc.net_pct, reason, conf))
@@ -305,6 +311,11 @@ def format_alert(row, cands: list[Cand]) -> str:
 def store(conn, row, cands: list[Cand], now: float) -> None:
     """Записывает кандидатов по режимам и сводку в строку объявления; снимает устаревшие теги."""
     lid = row["id"]
+    risky = any(f != "model_from_desc" for f in json.loads(row["flags"] or "{}"))
+    if risky or not (row["description"] or "").strip():     # для всех режимов: риск в тексте или нет описания — не «высокое»
+        for c in cands:
+            if c.confidence == "high":
+                c.confidence = "medium"
     modes = [c.mode for c in cands]
     # что перестало быть кандидатом (цена выросла, правила изменились) — убираем; проверенные карточкой остаются для отчёта
     keep = ",".join("?" * len(modes)) or "''"
