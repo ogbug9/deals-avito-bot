@@ -190,9 +190,15 @@ def category_sources(srcs: list, cats: list[str] | None) -> list:
     return sorted((s for s in srcs if s.category in cats), key=lambda s: cats.index(s.category))
 
 
-def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, cats: list[str] | None = None) -> int:
+FAST_PACE = 0.5      # --fast: паузы между страницами вдвое короче; после первой капчи — обычный темп
+
+
+def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, cats: list[str] | None = None,
+                         fast: bool = False) -> int:
     """Добрать каждую категорию до target объявлений. Идёт вглубь выдачи постранично и сохраняет после каждой
-    страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места."""
+    страницы: если Авито закроет доступ, собранное не пропадёт, а повторный запуск продолжит с того же места.
+    fast — паузы вдвое короче, пока Авито не попросит капчу; дальше до конца запуска обычные."""
+    pace = FAST_PACE if fast else 1.0
     srcs = category_sources([s for s in sources.load() if s.enabled], cats)
     plan = [(s, conn.execute("SELECT COUNT(*) FROM listings WHERE source=?", (s.url,)).fetchone()[0]) for s in srcs]
     print("Сейчас в базе: " + ", ".join(f"{sources.CATEGORIES[c][0]} {_in_category(conn, c)}"
@@ -205,7 +211,7 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
             empty = 0
             while _in_category(conn, s.category) < target and page <= max_page:
                 if not first:
-                    time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2))
+                    time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2) * pace)
                 first = False
                 started, cap0 = time.time(), col.captchas
                 try:
@@ -220,6 +226,9 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
                     print(f"⛔ {s.name}: {e}", file=sys.stderr, flush=True)
                     rc = 5
                     break
+                if col.captchas > cap0 and pace < 1.0:
+                    pace = 1.0
+                    print("Была капча — дальше обычные паузы между страницами.", flush=True)
                 if not items:
                     break                      # выдача кончилась — в этом разделе больше нет
                 st = process(conn, cfg, items, source=s.url, complete=False, category=s.category, region=s.region,
@@ -241,7 +250,7 @@ def cmd_collect(args, cfg: Config) -> int:
     conn = db.connect(cfg.db_path)
     if args.per_category:
         cats = [c.strip() for c in (args.cats or "").split(",") if c.strip()]
-        return collect_per_category(conn, cfg, args.per_category, cats=cats or None)
+        return collect_per_category(conn, cfg, args.per_category, cats=cats or None, fast=args.fast)
     srcs = [s for s in sources.load() if s.enabled]
     need = args.target - _active(conn)
     if need <= 0:
@@ -404,6 +413,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("collect", help="набрать базу до --target объявлений по sources.json")
     p.add_argument("--target", type=int, default=2000)
     p.add_argument("--per-category", type=int, default=0, metavar="N", help="добрать каждую категорию до N объявлений")
+    p.add_argument("--fast", action="store_true", help="паузы вдвое короче, пока нет капчи (риск капчи выше)")
     p.add_argument("--cats", default="", help="только эти разделы и в этом порядке, через запятую (protsessory,materinskie_platy,…)")
     p.add_argument("--dry-run", action="store_true", help="печатать алерты в консоль (по умолчанию алертов нет)")
     p.set_defaults(fn=cmd_collect)

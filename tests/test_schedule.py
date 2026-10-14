@@ -151,3 +151,34 @@ def test_per_category_collection_can_pick_and_order_sections():
     import pytest
     with pytest.raises(SystemExit):
         cli.category_sources(srcs, ["processors"])
+
+
+def test_fast_collection_halves_pauses_until_a_captcha(monkeypatch, tmp_path):
+    from pathlib import Path
+    from gpuflip import sources
+    html = (Path(__file__).parent / "fixtures" / "avito_search_2026-10.html").read_text(encoding="utf-8")
+
+    class FakeCol:
+        def __init__(self):
+            self.captchas, self.calls = 0, 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def fetch(self, url):
+            self.calls += 1
+            if self.calls == 3:
+                self.captchas += 1         # на третьей странице Авито попросил капчу (её прошли)
+            return html.replace('data-item-id="', f'data-item-id="{self.calls}x')
+
+    sleeps = []
+    monkeypatch.setattr(cli, "_collector", lambda cfg: FakeCol())
+    monkeypatch.setattr(cli.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(cli.random, "uniform", lambda a, b: a)
+    monkeypatch.setattr(sources, "load", lambda: [sources.Source("ЦП", "protsessory", "moskva")])
+    conn = db.connect(str(tmp_path / "f.db"))
+    cli.collect_per_category(conn, Config(), 10_000, max_page=5, fast=True)
+    assert sleeps[:2] == [Config().delay_sec * 0.5] * 2 and all(s == Config().delay_sec for s in sleeps[2:]) and len(sleeps) == 4
