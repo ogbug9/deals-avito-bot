@@ -69,6 +69,7 @@ class Worker(threading.Thread):
         if paused:
             self._paused.set()
         self.state, self.last_start, self.last_end = "idle", 0.0, 0.0
+        self.last_analysis = time.time() - ANALYSIS_EVERY + 600      # первый пересчёт — через 10 минут после старта
         self.last_rc: int | None = None
         self.last_kind, self.last_info, self.last_error = "", {}, ""
         try:                                      # расписание и счётчик запросов — с прошлого запуска
@@ -133,6 +134,8 @@ class Worker(threading.Thread):
                 db.rolling_backup(str(home() / "gpuflip.db"), "hour", keep=24, every=3600)
             except Exception as e:
                 _log(f"копия базы не сделана: {type(e).__name__}: {e}")
+            if time.time() - self.last_analysis >= ANALYSIS_EVERY and not self._halt.is_set():
+                self._analyse()
             if self.paused or self.sched.due() is None:
                 self._wake.wait(timeout=5)
                 self._wake.clear()
@@ -151,6 +154,21 @@ class Worker(threading.Thread):
                 self.sched.done(self.last_kind or "full", True)
                 _log(f"ошибка обхода: {self.last_error}")
             self.last_end, self.state = time.time(), "idle"
+
+    def _analyse(self) -> None:
+        """Пересчёт всей базы текущими правилами без сети: разбор ПК, линейки, похожие ПК, ушедшие лоты.
+        Идёт и тогда, когда сбор стоит из-за капчи, — анализ не ждёт новых объявлений."""
+        from .pipeline import rescore
+        self.last_analysis = time.time()
+        prev, self.state = self.state, "analysis"
+        try:
+            cfg = Config.load(self.env_file)
+            res = rescore(db.connect(cfg.db_path), cfg)
+            _log(f"анализ базы: {res['listings']} объявлений, кандидатов {res['candidates']}")
+        except Exception as e:
+            _log(f"анализ базы не удался: {type(e).__name__}: {e}")
+        finally:
+            self.state = prev
 
     def _on_captcha(self) -> None:
         self.state = "captcha"
@@ -244,6 +262,9 @@ def check_updates() -> dict:
 def restart() -> None:
     args = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "gpuflip", "app"]
     subprocess.Popen(args, cwd=str(Path(__file__).resolve().parent.parent) if not getattr(sys, "frozen", False) else None)
+
+
+ANALYSIS_EVERY = 2 * 3600     # полный пересчёт базы раз в 2 часа (первый — через 10 минут после запуска)
 
 
 # ------------------------------------------------------------------ один экземпляр

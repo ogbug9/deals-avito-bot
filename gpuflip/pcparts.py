@@ -139,6 +139,9 @@ def breakdown(conn, cfg: Config, title: str, description: str, price: float, now
     top = max((x["value"] for x in priced), default=0)
     out["warn"] = ("одна деталь по рынку стоит больше всего ПК — так бывает редко: проверьте, не цена ли это «от», "
                    "не предзаказ и не обман") if price and top >= price else ""
+    if "shop_build" in (flags or {}):
+        out["warn"] = ("магазин собирает ПК из новых деталей под заказ: цена «от», конфигурация на выбор — "
+                       "это не перепродажа б/у, по частям так не заработать")
     out["verdict"] = _verdict(out, price)
     return out
 

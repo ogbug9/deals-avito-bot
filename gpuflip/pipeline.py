@@ -261,7 +261,21 @@ def deep_targets(conn, cfg: Config, now: float, limit: int) -> list:
         "ORDER BY (l.mode_tags IS NULL), COALESCE(json_extract(l.score_json, '$.discount_vs_market'), 0) DESC, l.first_seen DESC "
         "LIMIT ?",
         (cfg.min_price, cfg.max_price, cfg.min_market_n, 1 - cfg.deep_discount, limit)).fetchall()
-    return list(rows)
+    return list(rows) + pc_deep_targets(conn, cfg, cfg.pc_deep_per_cycle, {r["id"] for r in rows})
+
+
+def pc_deep_targets(conn, cfg: Config, limit: int, skip: set) -> list:
+    """Системные блоки для чтения целиком: в выдаче описание обрезано, и без карточки детали не разобрать.
+    Сначала те, что дешевле похожих ПК и у которых оценено меньше половины деталей."""
+    if limit <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT l.id, l.url FROM listings l WHERE l.status='active' AND l.url<>'' AND l.category='pc' AND l.defect=0 "
+        "AND l.wanted=0 AND l.junk IS NULL AND l.deep_at IS NULL AND l.price BETWEEN ? AND ? AND l.parts_json IS NOT NULL "
+        "AND COALESCE(json_extract(l.parts_json, '$.priced'), 0) * 2 < COALESCE(json_extract(l.parts_json, '$.expected'), 6) "
+        "ORDER BY COALESCE(json_extract(l.parts_json, '$.peers.diff_pct'), 0) DESC, l.first_seen DESC LIMIT ?",
+        (cfg.min_price, cfg.max_price, limit + len(skip))).fetchall()
+    return [r for r in rows if r["id"] not in skip][:limit]
 
 
 def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | None = None,
@@ -277,6 +291,7 @@ def recheck(conn, cfg: Config, check, now: float | None = None, limit: int | Non
     deep_limit = cfg.deep_per_cycle if deep_limit is None else deep_limit
     out = {"checked": 0, "inactive": 0, "unknown": 0, "deep": 0}
     todo: dict[str, tuple[str, bool]] = {r["id"]: (r["url"], True) for r in deep_targets(conn, cfg, now, deep_limit)}
+    # (deep_targets уже добавил до cfg.pc_deep_per_cycle системных блоков сверх общего лимита)
     if limit > 0:
         cands = conn.execute(
             "SELECT DISTINCT l.id, l.url FROM listings l JOIN candidates c ON c.listing_id=l.id "

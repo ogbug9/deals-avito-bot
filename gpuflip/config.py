@@ -90,6 +90,7 @@ class Config:
     bundle_days: float = 14.0            # разборка и продажа по частям
     recheck_per_cycle: int = 3           # сколько карточек перепроверять за обход (кандидаты + случайные)
     deep_per_cycle: int = 3              # сколько карточек читать целиком за обход (прошедшие предфильтр по цене)
+    pc_deep_per_cycle: int = 3           # отдельно — системные блоки: без полного описания детали не разобрать
     verify_per_cycle: int = 5            # сколько давно не виденных объявлений проверять за обход: живо или ушло
     stale_days: float = 3.0              # «давно не видели»: столько дней объявление не попадалось в выдаче
     deep_discount: float = 0.10          # предфильтр: цена ниже медианы минимум на столько
@@ -144,7 +145,7 @@ class Config:
             ("MAX_ALERTS_PER_SCAN", "max_alerts_per_scan", int),
             ("ALERT_MARKET_N", "alert_market_n", int), ("REGION_MAX_PAGES", "region_max_pages", int),
             ("DELIVERY_COST", "delivery_cost", float), ("RECHECK_PER_CYCLE", "recheck_per_cycle", int),
-            ("DEEP_PER_CYCLE", "deep_per_cycle", int), ("VERIFY_PER_CYCLE", "verify_per_cycle", int),
+            ("DEEP_PER_CYCLE", "deep_per_cycle", int), ("PC_DEEP_PER_CYCLE", "pc_deep_per_cycle", int), ("VERIFY_PER_CYCLE", "verify_per_cycle", int),
             ("STALE_DAYS", "stale_days", float), ("LIGHT_MIN_SEC", "light_min_sec", float),
             ("LIGHT_MAX_SEC", "light_max_sec", float), ("FULL_INTERVAL_SEC", "full_interval_sec", float),
             ("MAX_REQUESTS_PER_HOUR", "max_requests_per_hour", int),

@@ -186,3 +186,17 @@ def test_pc_is_compared_with_other_pcs_with_the_same_card(conn):
     assert p["peers"]["diff_pct"] == pytest.approx((med - 30000) / med)
     lone, _ = parts_of(conn, 1000)
     assert lone["peers"]["n"] >= 7          # новый лот попадёт в сравнение со следующего обхода (пересчёт идёт в два прохода)
+
+
+def test_shop_builds_are_flagged_and_pcs_are_read_in_full(conn):
+    from gpuflip.normalizer import risk_flags
+    from gpuflip.pipeline import pc_deep_targets
+    text = "Только новые комплектующие. Соберём мощный игровой ПК под ваш бюджет. Корпус: на выбор более 30"
+    assert "shop_build" in risk_flags(text)
+    out = pcparts.breakdown(conn, Config(), "Игровой пк RTX 3060 12GB", text, 25000, NOW + 60, risk_flags(text))
+    assert "магазин собирает" in out["warn"]
+    put(conn, [L(1200, 35000, "Игровой пк RTX 3060 12GB"), L(1201, 30000, "Игровой компьютер", PC_TEXT)], "pc", NOW + 60)
+    ids = [r["id"] for r in pc_deep_targets(conn, Config(), 5, set())]
+    assert "1200" in ids and "1201" not in ids        # 1201 уже разобран (3 из 6) — карточку читать незачем
+    conn.execute("UPDATE listings SET deep_at=? WHERE id='1200'", (NOW + 70,))
+    assert "1200" not in [r["id"] for r in pc_deep_targets(conn, Config(), 5, set())]
