@@ -182,3 +182,12 @@ def test_fast_collection_halves_pauses_until_a_captcha(monkeypatch, tmp_path):
     conn = db.connect(str(tmp_path / "f.db"))
     cli.collect_per_category(conn, Config(), 10_000, max_page=5, fast=True)
     assert sleeps[:2] == [Config().delay_sec * 0.5] * 2 and all(s == Config().delay_sec for s in sleeps[2:]) and len(sleeps) == 4
+
+
+def test_page_pause_range_from_env(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("DELAY_SEC=20\nDELAY_MAX_SEC=25\n", encoding="utf-8")
+    cfg = Config.load(str(env))
+    pauses = [cfg.page_pause() for _ in range(200)]
+    assert 20 <= min(pauses) and max(pauses) <= 25
+    assert Config(delay_sec=15).page_pause.__self__.delay_max_sec == 0 and 15 <= Config(delay_sec=15).page_pause() <= 30

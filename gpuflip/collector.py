@@ -248,6 +248,7 @@ class AvitoCollector:
                  headless: bool = False, captcha_wait: float = 180.0, sleep=time.sleep):
         self.proxy, self.profile_dir, self.headless, self.captcha_wait = proxy, profile_dir, headless, captcha_wait
         self.delay, self.max_pages, self._sleep = delay, max_pages, sleep
+        self.delay_max = 0.0
         self.who = " ".join(sys.argv[1:3]) or "gpuflip"
         self.last_status, self.last_html = 0, ""   # для диагностики (probe)
         self.captchas = 0             # сколько раз за сеанс Авито просил капчу
@@ -377,7 +378,7 @@ class AvitoCollector:
                 seen[i.id] = i
             prev_ids = ids
             if page < max_pages:
-                self._sleep(random.uniform(self.delay, self.delay * 2))
+                self._sleep(random.uniform(self.delay, self.delay_max if self.delay_max > self.delay else self.delay * 2))
         return list(seen.values()), complete
 
 

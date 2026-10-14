@@ -21,7 +21,9 @@ from .pipeline import process, recheck, rescore
 
 
 def _collector(cfg: Config) -> AvitoCollector:
-    return AvitoCollector(cfg.proxy, cfg.delay_sec, cfg.max_pages, cfg.chrome_profile, cfg.headless, cfg.captcha_wait)
+    col = AvitoCollector(cfg.proxy, cfg.delay_sec, cfg.max_pages, cfg.chrome_profile, cfg.headless, cfg.captcha_wait)
+    col.delay_max = cfg.delay_max_sec
+    return col
 
 
 def _notifier(cfg: Config, dry: bool) -> Notifier:
@@ -95,7 +97,7 @@ def _run_sources(conn, cfg: Config, notifier, todo, target: int = 0, record_aler
         if (do_recheck and rc == 0 and not target and not should_stop()
                 and (cfg.recheck_per_cycle > 0 or cfg.deep_per_cycle > 0)):
             def check(u):
-                time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2))
+                time.sleep(cfg.page_pause(random))
                 return col.check_listing(u)
             res = recheck(conn, cfg, check, notifier=notifier)
             if res["checked"]:
@@ -211,7 +213,7 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
             empty = 0
             while _in_category(conn, s.category) < target and page <= max_page:
                 if not first:
-                    time.sleep(random.uniform(cfg.delay_sec, cfg.delay_sec * 2) * pace)
+                    time.sleep(cfg.page_pause(random) * pace)
                 first = False
                 started, cap0 = time.time(), col.captchas
                 try:

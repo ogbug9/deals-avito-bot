@@ -48,7 +48,8 @@ class Config:
     # Поиск
     search_urls: list[str] = field(default_factory=list)
     proxy: str = ""
-    delay_sec: float = 15.0         # пауза между страницами (случайно x1..x2); быстрее — Авито даёт 429
+    delay_sec: float = 15.0         # пауза между страницами, от (секунд); быстрее — Авито даёт 429
+    delay_max_sec: float = 0.0      # …до (секунд); 0 — вдвое больше delay_sec
     max_pages: int = 5
     chrome_profile: str = ".chrome-profile"   # постоянный профиль Chrome для сборщика
     headless: bool = False          # без окна капчу пройти нельзя — по умолчанию окно видно
@@ -106,6 +107,12 @@ class Config:
     max_alerts_per_scan: int = 10
     realert_drop_pct: float = 0.10
 
+    def page_pause(self, rnd=None) -> float:
+        """Случайная пауза между страницами: от DELAY_SEC до DELAY_MAX_SEC (или до вдвое большего)."""
+        import random
+        hi = self.delay_max_sec if self.delay_max_sec > self.delay_sec else self.delay_sec * 2
+        return (rnd or random).uniform(self.delay_sec, hi)
+
     @classmethod
     def load(cls, env_file: str = ".env") -> "Config":
         env = {**_read_env_file(env_file), **os.environ}
@@ -133,7 +140,7 @@ class Config:
         if env.get("LIGHT_CYCLE") not in (None, ""):
             c.light_cycle = env["LIGHT_CYCLE"].strip().lower() in ("1", "true", "yes", "on")
         for name, attr, cast in [
-            ("DELAY_SEC", "delay_sec", float), ("MAX_PAGES", "max_pages", int),
+            ("DELAY_SEC", "delay_sec", float), ("DELAY_MAX_SEC", "delay_max_sec", float), ("MAX_PAGES", "max_pages", int),
             ("CAPTCHA_WAIT", "captcha_wait", float),
             ("NEGOTIATION_DISCOUNT", "negotiation_discount", float),
             ("ASK_TO_SALE", "ask_to_sale", float), ("SELL_FEE_PCT", "sell_fee_pct", float),
