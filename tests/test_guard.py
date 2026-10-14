@@ -93,3 +93,20 @@ def test_damaged_base_is_replaced_by_the_latest_good_copy(tmp_path):
     name = guard.restore_latest(h)
     assert name and name in good and guard.check_db(h / "gpuflip.db") == ""
     assert any(p.name.startswith("повреждённая-") for p in (h / "backups").iterdir())          # испорченная не удалена
+
+
+def test_busy_base_is_not_mistaken_for_damaged(tmp_path, monkeypatch):
+    path = tmp_path / "gpuflip.db"
+    db.connect(str(path)).close()
+    calls = {"n": 0}
+    real = guard.sqlite3.connect
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise guard.sqlite3.OperationalError("database is locked")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(guard.sqlite3, "connect", flaky)
+    monkeypatch.setattr(guard.time, "sleep", lambda s: None)
+    assert guard.check_db(path) == "" and calls["n"] == 3

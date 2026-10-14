@@ -16,6 +16,11 @@ from pathlib import Path
 from .paths import home
 
 
+import re
+
+BUSY_RE = re.compile(r"locked|busy", re.I)
+
+
 def _alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -81,15 +86,22 @@ def check_db(path: str | Path) -> str:
     p = Path(path)
     if not p.exists():
         return ""
-    try:
-        c = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
+    for attempt in range(5):
         try:
-            res = c.execute("PRAGMA quick_check").fetchone()[0]
-        finally:
-            c.close()
-    except sqlite3.Error as e:
-        return str(e)
-    return "" if res == "ok" else str(res)
+            c = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=30)
+            try:
+                res = c.execute("PRAGMA quick_check").fetchone()[0]
+            finally:
+                c.close()
+        except sqlite3.OperationalError as e:
+            if BUSY_RE.search(str(e)):            # другой процесс пишет — это не повреждение, подождём
+                time.sleep(2 + attempt * 2)
+                continue
+            return str(e)
+        except sqlite3.Error as e:
+            return str(e)
+        return "" if res == "ok" else str(res)
+    return ""                                        # всё время занята — значит, жива; повреждением не считаем
 
 
 def restore_latest(home_dir: str | Path) -> str:

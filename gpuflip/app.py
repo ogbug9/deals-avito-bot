@@ -72,6 +72,7 @@ class Worker(threading.Thread):
         self.last_analysis = time.time() - ANALYSIS_EVERY + 600      # первый пересчёт — через 10 минут после старта
         self.last_rc: int | None = None
         self.job: dict | None = None              # задание из интерфейса: добор разделов
+        self.last_care = 0.0
         self._stop_job = threading.Event()
         self.last_kind, self.last_info, self.last_error = "", {}, ""
         try:                                      # расписание и счётчик запросов — с прошлого запуска
@@ -146,10 +147,7 @@ class Worker(threading.Thread):
     def run(self) -> None:
         from .cli import run_due
         while not self._halt.is_set():
-            try:                              # пока приложение открыто — копия базы раз в час, 24 последние
-                db.rolling_backup(str(home() / "gpuflip.db"), "hour", keep=24, every=3600)
-            except Exception as e:
-                _log(f"копия базы не сделана: {type(e).__name__}: {e}")
+            self._housekeeping()
             if time.time() - self.last_analysis >= ANALYSIS_EVERY and not self._halt.is_set():
                 self._analyse()
             if self.job and not self._halt.is_set():
@@ -173,6 +171,28 @@ class Worker(threading.Thread):
                 self.sched.done(self.last_kind or "full", True)
                 _log(f"ошибка обхода: {self.last_error}")
             self.last_end, self.state = time.time(), "idle"
+
+    def _housekeeping(self) -> None:
+        """Раз в 30 минут: проверка целостности, копия базы (48 последних), журнал базы дописывается в файл."""
+        if time.time() - self.last_care < 1800:
+            return
+        self.last_care = time.time()
+        path = str(home() / "gpuflip.db")
+        try:
+            from .guard import check_db
+            bad = check_db(path)
+            if bad:
+                self.pause()
+                _log(f"ВНИМАНИЕ: база повреждена ({bad[:200]}). Сбор остановлен; при следующем запуске будет "
+                     "восстановлена последняя целая копия.")
+                toast("База повреждена", "Сбор остановлен. Перезапустите приложение — восстановится последняя целая копия.")
+                return
+            db.rolling_backup(path, "hour", keep=48, every=1800)
+            c = db.connect(path)
+            c.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            c.close()
+        except Exception as e:
+            _log(f"обслуживание базы: {type(e).__name__}: {e}")
 
     def _run_job(self) -> None:
         from .cli import collect_per_category
@@ -388,11 +408,7 @@ class Desktop:
 
     def quit(self) -> None:
         self.quitting = True
-        self.worker.stop()
-        try:
-            lock_path().unlink(missing_ok=True)
-        except OSError:
-            pass
+        self.worker.stop()                     # метку app.lock снимает main(), когда сбор действительно остановлен
         if self.tray:
             try:
                 self.tray.stop()
@@ -472,6 +488,7 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             desk.quit()
+        _finish(worker)
         return 0
 
     import webview
@@ -483,4 +500,23 @@ def main(argv: list[str] | None = None) -> int:
     webview.settings["ALLOW_DOWNLOADS"] = True          # иначе встроенное окно молча игнорирует CSV и картинки сравнения
     webview.start(private_mode=False, storage_path=str(h / "webview"))
     desk.quit()
+    _finish(worker)
     return 0
+
+
+def _finish(worker) -> None:
+    """Дождаться остановки сбора, дописать журнал базы в файл и только потом снять метку «запущено».
+    Раньше метка снималась сразу, и второй экземпляр успевал запуститься, пока первый ещё писал в базу."""
+    worker.join(timeout=240)
+    try:
+        c = db.connect(str(home() / "gpuflip.db"))
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        c.close()
+    except Exception as e:
+        _log(f"журнал базы не дописан при выходе: {e}")
+    try:
+        lock = json.loads(lock_path().read_text(encoding="utf-8"))
+        if int(lock.get("pid", 0)) == os.getpid():
+            lock_path().unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
