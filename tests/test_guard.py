@@ -66,3 +66,12 @@ def test_adopt_never_touches_an_existing_base(tmp_path):
     c.close()
     db.connect(str(new / "gpuflip.db")).close()                         # пустая, но существующая база
     assert adopt(old, new) == [] and (old / "gpuflip.db").exists()
+
+
+def test_second_app_is_not_started_while_the_first_process_lives(monkeypatch):
+    from gpuflip import app
+    app.lock_path().write_text(json.dumps({"port": 1, "pid": os.getppid()}), encoding="utf-8")   # окно не отвечает, но процесс жив
+    assert app.running_instance() == 1
+    app.lock_path().write_text(json.dumps({"port": 1, "pid": 999_999_9}), encoding="utf-8")       # процесса нет — можно запускаться
+    assert app.running_instance() is None
+    app.lock_path().unlink()

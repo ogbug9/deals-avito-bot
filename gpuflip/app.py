@@ -252,15 +252,24 @@ def lock_path() -> Path:
 
 
 def running_instance() -> int | None:
-    """Порт уже запущенного приложения (и просьба показать окно) или None."""
+    """Порт уже запущенного приложения (и просьба показать окно) или None.
+
+    Главное — жив ли процесс из app.lock: окно может отвечать дольше пары секунд, и раньше из-за этого
+    открывался второй экземпляр со вторым сборщиком."""
+    from .guard import _alive
     try:
-        port = int(json.loads(lock_path().read_text(encoding="utf-8"))["port"])
+        lock = json.loads(lock_path().read_text(encoding="utf-8"))
+        port, pid = int(lock["port"]), int(lock.get("pid", 0))
+    except (OSError, ValueError, KeyError):
+        return None
+    alive = pid != os.getpid() and _alive(pid)
+    try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/api/app", data=b'{"action":"show"}',
                                      headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=2) as r:
-            return port if r.status == 200 else None
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return port if r.status == 200 or alive else None
     except Exception:
-        return None
+        return port if alive else None
 
 
 # ------------------------------------------------------------------ приложение
