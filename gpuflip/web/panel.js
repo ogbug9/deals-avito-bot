@@ -70,6 +70,34 @@ function gallery(d) {
     d.deep_at ? null : h("div", {class: "small", text: "Показано фото из выдачи. Все фото и полное описание появятся после чтения карточки (лоты, прошедшие предфильтр по цене)."}));
 }
 
+function pcSection(d) {
+  const p = d.parts;
+  if (!p) return null;
+  const kv = (k, v, cls) => h("tr", {class: cls || ""}, h("td", {colspan: "2", text: k}), h("td", {class: "r num", text: v}), h("td"));
+  const rows = p.items.map(x => h("tr", {class: x.value ? "" : "dim", title: x.note},
+    h("td", null, h("i", {class: "dot k-" + x.kind}), " " + x.label),
+    h("td", {text: G.partName(x) || "—"}),
+    h("td", {class: "r num", text: x.value ? G.fmt(x.value) : "—"}),
+    h("td", {class: "small", text: G.PART_STATUS[x.status] + (x.n && x.value ? ", n=" + x.n : "")})));
+  const foot = p.value ? [
+    kv("Оценённые детали (быстрая продажа)", G.fmt(p.value), "sum"),
+    kv("Цена лота", G.fmt(d.price)),
+    kv(p.diff >= 0 ? "Детали дороже лота на" : "До цены лота не хватает", G.fmt(Math.abs(p.diff)), p.diff >= 0 ? "gain" : ""),
+    p.net != null ? kv("Чистыми при продаже по частям (≈ " + Math.round(p.days) + " дн.)", G.fmt(p.net), p.net > 0 ? "gain" : "") : null] : [];
+  return h("div", null, h("h3", {text: "Что внутри ПК и сколько это стоит"}),
+    p.value ? G.pcBar(p, d.price) : null,
+    p.value ? h("div", {class: "legend"}, p.items.filter(x => x.value).map(x => h("span", null, h("i", {class: "dot k-" + x.kind}), " " + x.label.toLowerCase())),
+      h("span", null, h("i", {class: "markdot"}), " цена лота")) : null,
+    h("table", {class: "t pct"},
+      h("thead", null, h("tr", null, h("th", {text: "Деталь"}), h("th", {text: "Что названо"}), h("th", {class: "r", text: "Быстро продать"}), h("th", {text: "Откуда цена"}))),
+      h("tbody", null, rows), foot.length ? h("tfoot", null, foot) : null),
+    p.warn ? h("div", {class: "note", text: "Осторожно: " + p.warn + "."}) : null,
+    h("div", {class: "small", style: "margin-top:6px", text: "Сумма — нижняя граница: в неё входят только детали, названные в тексте и имеющие рынок в базе"
+      + (p.missing.length ? "; не оценено: " + p.missing.join(", ") + ", корпус" : "; не оценён только корпус") + ". «Чистыми» — после торга, издержек на каждую деталь и риска."
+      + (p.approx ? " Значок ≈ и «приблизительно» — оценка по цене за ГБ у похожих позиций или по малому числу объявлений." : "")
+      + (d.deep_at ? "" : " Описание в выдаче обрезано: после чтения карточки разбор станет полнее.")}));
+}
+
 function render(d) {
   const p = $("panel"), u = G.safeUrl(d.url), sc = d.score, tr = G.trust(sc);
   const rows = [];
@@ -119,7 +147,7 @@ function render(d) {
   }));
 
   const sim = d.similar, eq = d.equivalents;
-  p.replaceChildren(
+  p.replaceChildren(...[      // пустые блоки отбрасываем: replaceChildren(null) напечатал бы слово «null»
     h("button", {class: "btn small close", type: "button", text: "Закрыть ✕", title: "Закрыть панель (Esc)", onclick: G.panelClose}),
     h("h2", {text: d.title, style: "padding-right:110px;overflow-wrap:anywhere"}),
     h("div", {class: "meta", text: [d.city, d.date_text, d.category_title, d.item_key].filter(Boolean).join(" · ")}),
@@ -136,6 +164,7 @@ function render(d) {
       h("button", {class: "btn", type: "button", text: "Куплено", title: "Создать запись в журнале сделок", onclick: () => G.act.bought(current)}),
       st),
     d.reason ? h("div", null, h("h3", {text: "Почему это кандидат"}), h("ul", {class: "reasons"}, d.reason.split(" | ").map(r => h("li", {text: r})))) : null,
+    pcSection(d),
     h("h3", {text: "Описание"}), h("div", {style: "white-space:pre-line;overflow-wrap:anywhere", text: d.description || "—"}),
     h("h3", {text: "Цена и медиана"}), chart(d),
     h("h3", {text: "Расчёт"}), h("table", {class: "kv"}, h("tbody", null, rows)),
@@ -163,7 +192,7 @@ function render(d) {
     h("h3", {text: "Заметка"}), note,
     h("div", {class: "chips gap"},
       h("button", {class: "link", type: "button", text: d.seller_hidden ? "Продавец скрыт" : "Скрыть продавца", onclick: () => G.act.hide("seller", current)}),
-      h("button", {class: "link", type: "button", text: d.model_hidden ? "Модель скрыта" : "Скрыть модель", onclick: () => G.act.hide("model", current)})));
+      h("button", {class: "link", type: "button", text: d.model_hidden ? "Модель скрыта" : "Скрыть модель", onclick: () => G.act.hide("model", current)}))].filter(x => x != null && x !== false));
 }
 
 G.panelOpen = async function (it) {

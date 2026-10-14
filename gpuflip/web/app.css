@@ -185,3 +185,20 @@ kbd { background: var(--soft); border: 1px solid var(--line); border-radius: 5px
   .card { grid-template-columns: 96px minmax(0, 1fr); } .pic { width: 96px; height: 72px; }
   .side { grid-column: 1 / -1; text-align: left; } .tools { grid-column: 1 / -1; }
 }
+
+/* разбор ПК на детали */
+.k-gpu { --k: var(--series-a); } .k-cpu { --k: var(--series-b); } .k-mb { --k: var(--good); } .k-ram { --k: var(--info); }
+.k-ssd, .k-hdd, .k-disk { --k: #9a6fd8; } .k-psu { --k: var(--muted); } .k-case { --k: var(--line); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--k, var(--muted)); display: inline-block; flex: none; }
+.markdot { width: 2px; height: 12px; background: var(--text); display: inline-block; vertical-align: -2px; }
+.pcbox { margin-top: 8px; padding: 8px 10px; background: var(--soft); border-radius: 10px; }
+.pchead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.pcbar { position: relative; display: flex; height: 10px; border-radius: 999px; background: var(--line); margin: 8px 0; }
+.pcbar .seg { height: 100%; background: var(--k); box-shadow: inset -1px 0 0 var(--card); }
+.pcbar .seg:first-child { border-radius: 999px 0 0 999px; }
+.pcbar .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.chip.pc { background: var(--card); border: 1px solid var(--line); }
+.chip.ghostchip { background: none; border: 1px dashed var(--muted); color: var(--muted); }
+table.pct td, table.pct th { padding: 5px 6px; } table.pct tr.dim td { color: var(--muted); }
+table.pct tfoot td { border-bottom: 0; padding-top: 4px; padding-bottom: 2px; } table.pct tfoot tr:first-child td { border-top: 2px solid var(--line); padding-top: 7px; }
+table.pct tfoot tr.sum td { font-weight: 650; } table.pct tfoot tr.gain td { color: var(--good); font-weight: 650; }

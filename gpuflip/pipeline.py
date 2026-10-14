@@ -5,7 +5,7 @@ import json
 import statistics
 import time
 
-from . import analogs, db, modes, parts
+from . import analogs, db, modes, parts, pcparts
 from .config import Config
 from .normalizer import Parsed, condition, is_new, is_urgent, junk_reason, parse_listing, risk_flags
 from .notifier import Notifier
@@ -64,6 +64,7 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
     keys = set()
     hidden = db.excluded(conn)
     caps = analogs.ceilings(conn, now, cfg.min_market_n) if cfg.analog_ceiling else {}
+    pc_cache: dict = {}
     for l in listings:
         _mark_reseller(conn, cfg, l.id)
         row = conn.execute("SELECT * FROM listings WHERE id=?", (l.id,)).fetchone()
@@ -85,6 +86,8 @@ def process(conn, cfg: Config, listings, source: str, complete: bool,
             db.save_score(conn, l.id, sc.net if sc.ok else None, json.dumps(sc.to_dict(), ensure_ascii=False))
         else:
             db.save_score(conn, l.id, None, None)   # иначе в report висит старая оценка уже отсеянного объявления
+        if row["category"] == "pc":       # внутренняя стоимость: какие детали названы и сколько они стоят
+            pcparts.store(conn, cfg, row, now, caps, pc_cache)
         cands = modes.evaluate(conn, cfg, row, sc, ms, now, log, caps)
         for c in cands:
             log.hit(c.mode)
@@ -179,7 +182,7 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
                        image=r["image"] or "", rating=r["rating"], reviews=r["reviews"],
                        seller_id=r["seller_id"] or "", seller_name=r["seller_name"] or "")
         groups.setdefault((r["source"], r["category"], r["region"]), []).append(l)
-    total = {"listings": 0, "positions": 0, "candidates": 0, "modes": {}}
+    total = {"listings": 0, "positions": 0, "candidates": 0, "modes": {}, "gone": 0}
     for final in (False, True):
         for (source, category, region), items in groups.items():
             for l in items:        # last_seen не трогаем: пересчёт не означает, что объявление снова видели
@@ -199,8 +202,35 @@ def rescore(conn, cfg: Config, now: float | None = None) -> dict:
                     t["candidates"] += d["candidates"]
                     for k, v in d["rejected"].items():
                         t["rejected"][k] = t["rejected"].get(k, 0) + v
+    total["gone"] = analyze_gone(conn, cfg, now)
     conn.commit()
     return total
+
+
+def analyze_gone(conn, cfg: Config, now: float) -> int:
+    """Аналитика для ушедших объявлений: позиция, мусор, оценка и разбор ПК — теми же правилами, что и для активных.
+
+    Статус, даты и история не меняются; кандидатами ушедшие не становятся. Нужна, чтобы по всей базе
+    (а не только по тому, что сейчас в продаже) работали фильтры, сортировки и сравнения.
+    """
+    from .collector import RawListing
+    caps = analogs.ceilings(conn, now, cfg.min_market_n) if cfg.analog_ceiling else {}
+    cache: dict = {}
+    rows = conn.execute("SELECT * FROM listings WHERE status<>'active'").fetchall()
+    for r in rows:
+        l = RawListing(id=r["id"], title=r["title"] or "", price=r["price"] or 0.0, url=r["url"] or "",
+                       description=r["description"] or "", city=r["city"] or "")
+        _normalize(conn, l, r["category"])
+        row = conn.execute("SELECT * FROM listings WHERE id=?", (r["id"],)).fetchone()
+        if row["item_key"]:
+            ms = db.market_stats(conn, row["item_key"], row["id"], now)
+            sc = score_listing(row["price"] or 0.0, json.loads(row["flags"] or "{}"), ms, cfg, caps.get(row["item_key"]))
+            db.save_score(conn, row["id"], sc.net if sc.ok else None, json.dumps(sc.to_dict(), ensure_ascii=False))
+        else:
+            db.save_score(conn, row["id"], None, None)
+        if row["category"] == "pc":
+            pcparts.store(conn, cfg, row, now, caps, cache)
+    return len(rows)
 
 
 def _save_market_history(conn, keys: set[str], now: float) -> None:

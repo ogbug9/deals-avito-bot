@@ -248,7 +248,8 @@ def cmd_rescore(args, cfg: Config) -> int:
     from . import normalizer
     normalizer.reload_words()
     res = rescore(db.connect(cfg.db_path), cfg)
-    print(f"Пересчитано {res['listings']} объявлений, позиций распознано {res['positions']}, кандидатов {res['candidates']}")
+    print(f"Пересчитано {res['listings']} объявлений, позиций распознано {res['positions']}, кандидатов {res['candidates']}"
+          f"; ушедших, по которым обновлена аналитика: {res.get('gone', 0)}")
     for m, d in res["modes"].items():
         rej = ", ".join(f"{k} {v}" for k, v in sorted(d["rejected"].items(), key=lambda kv: -kv[1])[:6])
         print(f"  {modes.MODE_TITLES[m]:<20} просмотрено {d['viewed']:<5} кандидатов {d['candidates']:<3} отсеяно: {rej}")

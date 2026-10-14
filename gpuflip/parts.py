@@ -357,17 +357,55 @@ def parse_pc(title: str, description: str = "") -> Bundle:
     return b
 
 
-def _pc_ram(full: str) -> Part | None:
-    m = re.search(r"(?:озу|оперативн\w*(?:\s+памят\w*)?|памят\w*|ram)\W{0,12}(?:ddr\s?\d\w?\W{0,4})?(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b|гиг)", full) \
-        or re.search(r"(?<![0-9])(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b|гиг)\w*\s*(?:ddr\s?\d\w?\s*)?(?:озу|оперативн|ram|памят)", full) \
-        or re.search(r"ddr\s?\d\w?\W{0,4}(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b)", full)
-    if not m:
+_DDR_BY_SOCKET = {"AM4": 4, "AM5": 5, "LGA1151": 4, "LGA1200": 4, "LGA1155": 3, "LGA1150": 3, "LGA1156": 3, "AM3": 3, "AM3+": 3}
+
+
+def platform_ddr(full: str) -> int | None:
+    """Тип памяти по платформе, когда продавец его не написал: Ryzen 5 3600 — это DDR4, i5-3470 — DDR3.
+    Там, где платформа держит оба типа (LGA1700: 12–14-е поколение Intel), не гадаем."""
+    mb = mb_position(full)
+    if mb:
+        ddr = _DDR_BY_SOCKET.get(mb[0].split()[1])
+        if ddr:
+            return ddr
+    cpus = find_cpus(full)
+    if len(cpus) != 1:
         return None
-    total = int(m.group(2)) * int(m.group(1) or 1)
+    m = re.fullmatch(r"Ryzen (?:[3579] )?(\d)\d{3}\w*", cpus[0])
+    if m:
+        return 4 if m.group(1) in "12345" else 5 if m.group(1) in "789" else None
+    m = re.fullmatch(r"i[3579]-(\d{4,5})\w*", cpus[0])
+    if m:
+        gen = int(m.group(1)[:2]) if len(m.group(1)) == 5 else int(m.group(1)[0])
+        return 3 if gen in (2, 3, 4) else 4 if gen in (6, 7, 8, 9, 10, 11) else None
+    return None
+
+
+_PC_RAM_RES = [re.compile(x) for x in (
+    r"(?<![a-zа-я])(?:озу|оперативн\w*(?:\s+памят\w*)?|памят\w*|ram)\W{0,12}(?:ddr\s?\d\w?\W{0,4})?(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b|гиг)",
+    r"(?<![0-9])(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b|гиг)\w*\s*(?:ddr\s?\d\w?\s*)?(?:озу|оперативн|ram|памят)",
+    r"ddr\s?\d\w?\W{0,4}(?:(\d)\s*[xх*]\s*)?(\d{1,3})\s*(?:gb|гб|g\b)",
+)]
+
+
+def _pc_ram(full: str) -> Part | None:
+    total = 0
+    for rx in _PC_RAM_RES:           # «16gbram/500gbnvme»: первое совпадение может оказаться объёмом диска
+        for m in rx.finditer(full):
+            size = int(m.group(2)) * int(m.group(1) or 1)
+            if size in RAM_SIZES:
+                total = size
+                break
+        if total:
+            break
+    if not total:
+        return None
     ddr = _DDR_RE.search(full)
-    if total not in RAM_SIZES or not ddr:
+    gen = int(ddr.group(1)) if ddr else platform_ddr(full)
+    if not gen:
         return None                      # объём без типа памяти не оценить
-    return Part("ram", f"RAM DDR{ddr.group(1)} {total}GB", qty=float(total), unit="₽/ГБ")
+    return Part("ram", f"RAM DDR{gen} {total}GB", qty=float(total), unit="₽/ГБ",
+                detail={} if ddr else {"inferred": "тип памяти не написан, взят по платформе"})
 
 
 def _pc_psu(full: str) -> Part | None:

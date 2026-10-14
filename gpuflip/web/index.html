@@ -66,6 +66,7 @@
     </select>
     <label class="chk gap"><input type="checkbox" id="f-urgent"> Срочные / с торгом</label>
     <label class="chk"><input type="checkbox" id="f-drop"> Цена снижена</label>
+    <label class="chk" title="Системные блоки, у которых названные в тексте детали по рынку стоят больше самого лота"><input type="checkbox" id="f-pcgain"> ПК: детали дороже цены</label>
     <h3>Мои пометки</h3>
     <label class="chk"><input type="checkbox" id="f-fav"> Только избранное</label>
     <select id="f-ustatus" class="gap" aria-label="Мой статус">
@@ -108,6 +109,7 @@
         <option value="rating">По рейтингу продавца</option>
         <option value="first">Недавно добавленные в базу</option><option value="gone">Недавно ушедшие</option>
         <option value="quick">По цене быстрой продажи</option>
+        <option value="parts">ПК: детали минус цена</option>
       </select>
       <button class="btn small" id="cols-btn" type="button" title="Колонки таблицы и профили вида">Колонки</button>
       <a class="btn small" id="export-btn" href="/api/export.csv" title="Скачать найденное в CSV (с текущими фильтрами)">CSV</a>

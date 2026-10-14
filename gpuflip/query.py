@@ -28,6 +28,7 @@ SORTS = {
     "seen": ("last_seen", True, "", ""),
     "gone": ("gone_at", True, "gone_at IS NULL OR status<>'inactive'", ""),
     "life": ("(gone_at - COALESCE(posted_at, first_seen))", False, "gone_at IS NULL OR status<>'inactive'", ""),
+    "parts": ("(parts_value - price)", True, "parts_value IS NULL OR COALESCE(price, 0)=0", ""),
     "quick": (_SC.format("quick_price"), True, f"{_NO_MARKET} OR COALESCE({_SC.format('quick_price')}, 0)=0", ""),
 }
 # подписи фильтров — для чипов и подсказки «какой фильтр обнулил выдачу»
@@ -38,7 +39,7 @@ FILTER_LABELS = {"q": "поиск по тексту", "cat": "категория
                  "ustatus": "мой статус", "conf": "доверие", "disc": "скидка к рынку от, %", "urgent": "срочные",
                  "drop": "цена снижена", "ids": "выбранные лоты",
                  "status": "какие объявления",
-                 "cond": "состояние", "junk": "только мусор"}
+                 "cond": "состояние", "junk": "только мусор", "pcgain": "ПК: детали дороже цены"}
 
 
 def _one(q: dict, k: str) -> str:
@@ -98,6 +99,8 @@ def build_query(q: dict, conn=None) -> tuple[str, list]:
         where.append("defect=0 AND junk IS NULL")
     if _one(q, "junk") == "1":                 # только мусор — чтобы проверить, что помечено верно
         where.append("junk IS NOT NULL")
+    if _one(q, "pcgain") == "1":               # ПК, у которого оценённые детали стоят больше самого лота
+        where.append("parts_value>price AND price>0")
     if _one(q, "cond") in ("new", "used"):
         where.append("cond=?")
         args.append(_one(q, "cond"))

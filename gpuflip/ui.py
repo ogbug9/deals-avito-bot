@@ -31,7 +31,7 @@ FIELDS = ("id, url, title, description, city, price, first_price, category, regi
           "posted_at, first_seen, last_seen, rating, reviews, defect, wanted, gpu_key, item_key, fine_key, unit_price, qty, "
           "flags, net_profit, score_json, status, mode_tags, est_profit, est_profit_pct, reason, confidence, model_source, "
           "urgent, is_msk, avito_condition, fav, user_status, note, seller_id, seller_name, seller_type, seller_ads, "
-          "reseller, photos, deep_at, avito_model, checklist, brand, gone_at, checked_at, junk, cond")
+          "reseller, photos, deep_at, avito_model, checklist, brand, gone_at, checked_at, junk, cond, parts_json, parts_value")
 # чек-лист проверки на месте: ключ → подпись (отметки хранятся в записи лота)
 CHECKLIST = [
     ("stress", "Нагрузка FurMark / OCCT 10–15 минут без вылетов"),
@@ -51,7 +51,8 @@ PREF_KEYS = ("ui.view", "ui.profiles", "ui.compare")
 
 def _row(r, now: float | None = None) -> dict:
     now = time.time() if now is None else now
-    d = {k: r[k] for k in r.keys() if k not in ("score_json", "flags", "photos", "checklist")}
+    d = {k: r[k] for k in r.keys() if k not in ("score_json", "flags", "photos", "checklist", "parts_json")}
+    d["parts"] = json.loads(r["parts_json"]) if r["parts_json"] else None
     d["flags"] = json.loads(r["flags"] or "{}")
     sc = json.loads(r["score_json"]) if r["score_json"] else None
     d["score"] = sc and {k: sc.get(k) for k in ("ok", "reason", "median_ask", "market_n", "net", "net_pct", "target_buy",

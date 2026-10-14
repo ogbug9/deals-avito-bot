@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS excluded(kind TEXT NOT NULL, value TEXT NOT NULL, tit
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS compare_sets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ids TEXT, ref TEXT, created REAL);
 """
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 # Колонки, добавленные после первой версии: дописываются в существующую базу при подключении.
@@ -96,6 +96,9 @@ EXTRA_COLUMNS = {
     # --- версия 5 ---
     "junk": "TEXT",                           # мусор: box | incomplete | scrap | price (см. normalizer.JUNK_RU)
     "cond": "TEXT",                           # оценка по тексту: new | used
+    # --- версия 6 ---
+    "parts_json": "TEXT",                     # разбор ПК на детали с оценкой каждой (pcparts.breakdown)
+    "parts_value": "REAL",                    # сумма оценённых деталей по цене быстрой продажи
 }
 # колонки, добавленные в другие таблицы
 EXTRA_OTHER = {

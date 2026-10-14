@@ -99,6 +99,44 @@ G.badges = function (it, opt) {
   return out;
 };
 
+// ---------- разбор ПК на детали: что внутри и сколько это стоит ----------
+G.PART_STATUS = {ok: "по рынку позиции", rough: "мало данных", approx: "приблизительно", nomarket: "нет рынка",
+  unknown: "не названо", absent: "нет в комплекте"};
+G.partName = x => (x.key || "").replace(/^(CPU|RAM|MB|PSU) /, "");
+G.pcSummary = function (p) {
+  if (!p || !p.value || p.diff == null) return null;
+  const gain = p.diff >= 0;
+  return {text: gain ? "детали дороже лота на " + G.fmt(p.diff) : "детали покрывают " + G.pct(p.ratio) + " цены",
+    cls: p.warn ? "warn" : gain ? "good" : "", tip: p.warn || p.verdict};
+};
+G.pcBar = function (p, price) {      // полоса: доли деталей и отметка цены лота
+  const max = Math.max(p.value, price || 0) || 1;
+  const bar = G.h("div", {class: "pcbar", role: "img", "aria-label": "Стоимость деталей относительно цены лота"});
+  for (const x of p.items) if (x.value) bar.append(G.h("span", {class: "seg k-" + x.kind,
+    style: "width:" + (x.value / max * 100).toFixed(2) + "%", title: x.label + " " + G.partName(x) + " — " + G.fmt(x.value)}));
+  if (price) bar.append(G.h("i", {class: "mark", style: "left:" + Math.min(100, price / max * 100).toFixed(2) + "%", title: "Цена лота " + G.fmt(price)}));
+  return bar;
+};
+G.pcBox = function (it) {            // компактный блок для карточки в списке
+  const p = it.parts;
+  if (!p) return null;
+  const h = G.h, priced = p.items.filter(x => x.value), rest = p.items.filter(x => !x.value && x.kind !== "case");
+  if (!priced.length && !rest.some(x => x.key))
+    return h("div", {class: "pcbox small", text: "Внутри ПК: детали в тексте не названы — оценить нельзя" + (it.deep_at ? "" : " (описание в выдаче обрезано)")});
+  const sum = G.pcSummary(p);
+  return h("div", {class: "pcbox"},
+    h("div", {class: "pchead"}, h("b", {text: "Внутри ПК"}),
+      priced.length ? h("span", {class: "num", text: "детали ≈ " + G.fmt(p.value), title: "Сумма оценённых деталей по цене быстрой продажи"}) : null,
+      sum ? h("span", {class: "chip strong " + sum.cls, text: sum.text, title: sum.tip}) : null,
+      h("span", {class: "small", text: "оценено " + p.priced + " из " + p.expected, title: p.missing.length ? "Не оценено: " + p.missing.join(", ") : "Оценены все основные детали"})),
+    priced.length ? G.pcBar(p, it.price) : null,
+    h("div", {class: "chips"},
+      priced.map(x => h("span", {class: "chip pc k-" + x.kind, title: x.label + ": " + x.note},
+        h("i", {class: "dot"}), G.partName(x) + " · " + G.fmt(x.value) + (x.status === "ok" ? "" : " ≈"))),
+      rest.map(x => h("span", {class: "chip ghostchip", title: x.note,
+        text: x.label.toLowerCase() + (x.key ? " " + G.partName(x) : "") + (x.status === "absent" ? " — нет" : " — ?")}))));
+};
+
 // ---------- настройки вида: хранятся в браузере и на сервере ----------
 G.DEFAULT_COLS = [
   ["cmp", "Ср.", 44, true, true], ["fav", "★", 40, true, true], ["title", "Название", 300, true, true],
@@ -110,9 +148,10 @@ G.DEFAULT_COLS = [
   ["status", "Статус", 110, false, false],
   ["first", "В базе с", 120, false, false], ["seen", "Видели", 120, false, false], ["gone", "Ушло", 110, false, false],
   ["life", "Прожило", 90, false, false], ["quick", "Быстрая продажа", 130, false, false],
+  ["parts", "Детали ПК", 170, false, false],
 ];
 G.COL_SORT = {title: "title", price: "price_asc", median: "median", disc: "pct", profit: "profit", n: "n", model: "model",
-  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating", first: "first", seen: "seen", gone: "gone", life: "life", quick: "quick"};
+  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating", first: "first", seen: "seen", gone: "gone", life: "life", quick: "quick", parts: "parts"};
 G.defaultView = () => ({mode: "cards", density: "normal", font: 14, theme: "auto",
   cols: G.DEFAULT_COLS.map(c => ({key: c[0], on: c[3], pin: c[4]}))});
 G.PROFILES = {   // стартовые профили вида; свои сохраняются поверх

@@ -3,7 +3,7 @@
 (function () {
 const h = G.h;
 const TEXT = ["q", "pmin", "pmax", "region", "city", "rating", "age", "hours", "model", "mode", "conf", "ustatus", "disc", "status", "cond"];
-const CHECKS = ["delivery", "profit", "fav", "urgent", "drop", "junk"];
+const CHECKS = ["delivery", "profit", "fav", "urgent", "drop", "junk", "pcgain"];
 const SHOWS = ["defect", "wanted", "excluded"];            // галочка «скрыть» включена → параметра нет
 const PRESETS = [
   ["Только кандидаты", {profit: "1"}, "Лоты, прошедшие хотя бы один режим поиска"],
@@ -12,6 +12,7 @@ const PRESETS = [
   ["С доставкой", {delivery: "1"}, "Есть Авито Доставка"],
   ["Новые за час", {hours: "1"}, "Появились за последний час"],
   ["Цена снижена", {drop: "1"}, "Продавец уже снижал цену"],
+  ["ПК дешевле деталей", {pcgain: "1"}, "Системные блоки, у которых оценённые детали стоят больше самого лота"],
 ];
 const BLOCK = 100;
 const L = G.list = {rows: [], total: 0, cur: -1, shown: 0, sort: "date", dir: "", pending: {}, cats: new Set(), seq: 0,
@@ -175,6 +176,7 @@ function cardEl(it, i) {
       it.description ? h("div", {class: "desc", text: it.description}) : null,
       h("div", {class: "meta", text: [it.city, it.date_text, it.category_title, it.item_key].filter(Boolean).join(" · ") || "—"}),
       h("div", {class: "chips", style: "margin-top:6px"}, G.badges(it)),
+      G.pcBox(it),
       it.reason ? h("ul", {class: "reasons"}, it.reason.split(" | ").map(r => h("li", {text: r}))) : null),
     side,
     h("div", {class: "tools"}, star(it), h("label", {class: "chk", title: "Добавить в сравнение (c)"}, cmpBox(it), "Сравнить"), statusSelect(it), note,
@@ -192,6 +194,7 @@ function gridEl(it, i) {
       h("div", null, h("span", {class: "price num", text: G.fmt(it.price)}), " ",
         it.est_profit > 0 ? h("span", {class: "num " + G.profitClass(it.est_profit), text: profitText(it)}) : null),
       h("div", {class: "meta", text: [it.item_key, it.city].filter(Boolean).join(" · ") || "—"}),
+      it.parts && it.parts.value ? h("div", {class: "small num", title: it.parts.verdict, text: "детали ≈ " + G.fmt(it.parts.value) + " (" + it.parts.priced + " из " + it.parts.expected + ")"}) : null,
       h("div", {class: "chips"}, h("span", {class: "chip " + tr.cls, text: tr.text, title: tr.tip}), G.badges(it, {short: true}).slice(0, 4)),
       h("div", {class: "foot"}, star(it), h("label", {class: "chk"}, cmpBox(it), "Сравнить"),
         u ? h("a", {class: "btn small push", href: u, target: "_blank", rel: "noopener noreferrer", text: "На Авито"}) : null)));
@@ -238,8 +241,10 @@ const CELL = {
     title: it.gone ? "Снято с публикации" : ""}),
   life: it => h("span", {class: "num small", text: it.lifetime_days != null ? G.days(it.lifetime_days) : "—", title: "Сколько прожило объявление до снятия"}),
   quick: it => h("span", {class: "num small", text: it.score && it.score.quick_price ? G.fmt(it.score.quick_price) : "—", title: it.score ? (it.score.why || []).join("\n") : ""}),
+  parts: it => { const p = it.parts; if (!p || !p.value) return h("span", {class: "small", text: "—", title: p ? p.verdict : "Не системный блок"});
+    return h("span", {class: "num " + (p.diff >= 0 ? "p-mild" : "small"), title: p.verdict, text: G.fmt(p.value) + " (" + (p.diff >= 0 ? "+" : "−") + Math.abs(Math.round(p.diff)).toLocaleString("ru-RU") + ")"}); },
 };
-const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life", "quick"]);
+const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life", "quick", "parts"]);
 function cols() {
   const def = new Map(G.DEFAULT_COLS.map(c => [c[0], c]));
   const on = G.view.cols.filter(c => c.on).map(c => ({key: c.key, label: def.get(c.key)[1], w: def.get(c.key)[2], pin: c.pin}));
