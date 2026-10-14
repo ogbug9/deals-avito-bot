@@ -247,6 +247,9 @@ def collect_per_category(conn, cfg: Config, target: int, max_page: int = 100, ca
 
 def cmd_collect(args, cfg: Config) -> int:
     """Первичный набор базы: глубже обычного обхода, пока не наберётся --target объявлений."""
+    saved = db.backup(cfg.db_path)                 # перед долгим набором — свежая копия базы
+    if saved:
+        print(f"Копия базы перед набором: {saved}", flush=True)
     conn = db.connect(cfg.db_path)
     if args.per_category:
         cats = [c.strip() for c in (args.cats or "").split(",") if c.strip()]

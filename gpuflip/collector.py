@@ -11,6 +11,7 @@ import csv
 import hashlib
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
@@ -48,6 +49,10 @@ class BlockedError(RuntimeError):
 
 class FetchError(RuntimeError):
     """Браузер не запустился или страница не открылась (сеть, прокси, нет Chrome)."""
+
+
+class BusyError(FetchError):
+    """Сборщик уже занят другим процессом (приложение или collect) — второй Chrome не запускаем."""
 
 
 def _digits(s: str) -> float:
@@ -243,6 +248,7 @@ class AvitoCollector:
                  headless: bool = False, captcha_wait: float = 180.0, sleep=time.sleep):
         self.proxy, self.profile_dir, self.headless, self.captcha_wait = proxy, profile_dir, headless, captcha_wait
         self.delay, self.max_pages, self._sleep = delay, max_pages, sleep
+        self.who = " ".join(sys.argv[1:3]) or "gpuflip"
         self.last_status, self.last_html = 0, ""   # для диагностики (probe)
         self.captchas = 0             # сколько раз за сеанс Авито просил капчу
         self.requests = 0             # сколько страниц загружено за сеанс
@@ -257,6 +263,8 @@ class AvitoCollector:
         self.close()
 
     def _start(self):
+        from . import guard
+        guard.acquire(self.who)                            # один Chrome на профиль: второй процесс получит BusyError
         from playwright.sync_api import sync_playwright   # тяжёлый импорт — только когда нужен браузер
         self._pw = sync_playwright().start()
         self._ctx = self._pw.chromium.launch_persistent_context(
@@ -265,6 +273,7 @@ class AvitoCollector:
         self._page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
 
     def close(self):
+        started = self._pw is not None
         for obj, fn in ((self._ctx, "close"), (self._pw, "stop")):
             try:
                 if obj:
@@ -272,6 +281,9 @@ class AvitoCollector:
             except Exception:
                 pass
         self._pw = self._ctx = self._page = None
+        if started:
+            from . import guard
+            guard.release()
 
     def _count(self) -> None:
         """Перед каждой загрузкой: учесть запрос и, если упёрлись в часовой лимит, подождать."""
