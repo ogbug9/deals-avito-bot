@@ -15,3 +15,5 @@ build/
 dist/
 *.spec
 app.lock
+
+build.err
