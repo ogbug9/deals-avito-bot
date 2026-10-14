@@ -253,7 +253,13 @@ def cmd_collect(args, cfg: Config) -> int:
     conn = db.connect(cfg.db_path)
     if args.per_category:
         cats = [c.strip() for c in (args.cats or "").split(",") if c.strip()]
-        return collect_per_category(conn, cfg, args.per_category, cats=cats or None, fast=args.fast)
+        try:
+            return collect_per_category(conn, cfg, args.per_category, cats=cats or None, fast=args.fast)
+        finally:                                   # собранное сразу в отдельную копию (5 последних наборов)
+            conn.commit()
+            saved = db.rolling_backup(cfg.db_path, "collect", keep=5, every=0)
+            if saved:
+                print(f"Копия базы после набора: {saved}", flush=True)
     srcs = [s for s in sources.load() if s.enabled]
     need = args.target - _active(conn)
     if need <= 0:

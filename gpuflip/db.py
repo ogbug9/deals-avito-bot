@@ -126,23 +126,32 @@ def backup(path: str) -> str | None:
 
 def auto_backup(path: str, keep: int = 7, every: float = 86400.0, now: float | None = None) -> str | None:
     """Суточная копия базы с ротацией: backups/auto-ГГГГММДД-ЧЧММСС.db, хранится keep последних."""
+    return rolling_backup(path, "auto", keep, every, now)
+
+
+def rolling_backup(path: str, prefix: str, keep: int, every: float, now: float | None = None) -> str | None:
+    """Копия базы раз в every секунд с ротацией: backups/<prefix>-<имя>-<дата>.db, хранится keep последних.
+    Повреждённую базу не копирует — иначе ротация вытеснила бы целые копии испорченными."""
+    from .guard import check_db
     src = Path(path)
     if path == ":memory:" or not src.exists():
         return None
     now = time.time() if now is None else now
     d = src.parent / "backups"
     d.mkdir(exist_ok=True)
-    autos = sorted(d.glob(f"auto-{src.stem}-*.db"))
+    autos = sorted(d.glob(f"{prefix}-{src.stem}-*.db"))
     if autos and now - autos[-1].stat().st_mtime < every:
         return None
-    dst = d / f"auto-{src.stem}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.db"
+    if check_db(src):
+        return None
+    dst = d / f"{prefix}-{src.stem}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.db"
     a, b = sqlite3.connect(path, timeout=30), sqlite3.connect(str(dst))
     try:
         a.backup(b)
     finally:
         a.close()
         b.close()
-    for old in sorted(d.glob(f"auto-{src.stem}-*.db"))[:-keep]:
+    for old in sorted(d.glob(f"{prefix}-{src.stem}-*.db"))[:-keep]:
         old.unlink(missing_ok=True)
     return str(dst)
 

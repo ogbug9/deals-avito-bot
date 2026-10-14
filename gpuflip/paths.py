@@ -65,7 +65,8 @@ def adopt(src: Path, dst: Path) -> list[str]:
     Ничего не удаляет: что мешает в новом месте — переименовывается с пометкой времени.
     """
     src, dst = Path(src), Path(dst)
-    if src.resolve() == dst.resolve() or _listings(src / "gpuflip.db") <= 0 or _listings(dst / "gpuflip.db") > 0:
+    # в новом месте база уже есть (даже пустая или занятая другим процессом) — ничего не трогаем
+    if src.resolve() == dst.resolve() or _listings(src / "gpuflip.db") <= 0 or (dst / "gpuflip.db").exists():
         return []
     dst.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")

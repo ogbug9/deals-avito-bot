@@ -148,11 +148,19 @@ G.DEFAULT_COLS = [
   ["status", "Статус", 110, false, false],
   ["first", "В базе с", 120, false, false], ["seen", "Видели", 120, false, false], ["gone", "Ушло", 110, false, false],
   ["life", "Прожило", 90, false, false], ["quick", "Быстрая продажа", 130, false, false],
-  ["parts", "Детали ПК", 170, false, false],
+  ["parts", "Детали ПК", 170, false, false], ["roi", "Доходность", 96, false, false], ["perday", "₽ в день", 100, false, false],
 ];
 G.COL_SORT = {title: "title", price: "price_asc", median: "median", disc: "pct", profit: "profit", n: "n", model: "model",
-  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating", first: "first", seen: "seen", gone: "gone", life: "life", quick: "quick", parts: "parts"};
-G.defaultView = () => ({mode: "cards", density: "normal", font: 14, theme: "auto",
+  city: "city", age: "date", listed: "age", drop: "drop", rating: "rating", first: "first", seen: "seen", gone: "gone", life: "life", quick: "quick", parts: "parts", roi: "roi", perday: "perday"};
+G.THEMES = {   // ключ → название, подпись, образцы цветов (фон, карточка, рамка, акцент, второй акцент)
+  amethyst: ["Аметист и золото", "тёмный фиолетовый, золотые рамки", ["#110c1b", "#1a1428", "#8f7232", "#d9b44a", "#b48cff"]],
+  imperial: ["Императорский", "бордово-фиолетовый, яркое золото", ["#16081a", "#220d29", "#a07c22", "#ecc14b", "#d58cff"]],
+  midnight: ["Полночь и латунь", "глубокий синий, латунь", ["#0b0d1a", "#141830", "#6f5d3b", "#c9a76a", "#8ea6ff"]],
+  obsidian: ["Обсидиан", "графит, сдержанный фиолетовый", ["#0f0f12", "#18181d", "#5c4f2c", "#b9a0ff", "#d2aa4f"]],
+  parchment: ["Пергамент", "светлая: днём и на солнце", ["#f4efe6", "#fffaf1", "#c9a85a", "#6b3fb5", "#b8861b"]],
+};
+G.defaultView = () => ({mode: "cards", density: "normal", font: 14, theme: "amethyst", zoom: 1, sideW: 260, panelW: 480,
+  filters: true, float: false,
   cols: G.DEFAULT_COLS.map(c => ({key: c[0], on: c[3], pin: c[4]}))});
 G.PROFILES = {   // стартовые профили вида; свои сохраняются поверх
   "для охоты": {mode: "compact", density: "compact", sort: "date"},
@@ -169,12 +177,21 @@ G.normCols = function () {     // новые колонки дописывают
   G.view.cols = cur;
 };
 G.applyView = function () {
-  const r = document.documentElement;
-  if (G.view.theme === "auto") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", G.view.theme);
-  r.setAttribute("data-density", G.view.density);
-  r.style.setProperty("--fs", G.view.font + "px");
-  $("theme").textContent = "Тема: " + ({auto: "авто", light: "светлая", dark: "тёмная"})[G.view.theme];
-  for (const [id, k] of [["p-density", "density"], ["p-font", "font"], ["p-theme", "theme"]]) if ($(id)) $(id).value = G.view[k];
+  const r = document.documentElement, v = G.view;
+  if (!G.THEMES[v.theme]) v.theme = v.theme === "light" ? "parchment" : "amethyst";   // старые «авто / светлая / тёмная»
+  r.setAttribute("data-theme", v.theme);
+  r.setAttribute("data-density", v.density);
+  r.setAttribute("data-filters", v.filters === false ? "off" : "on");
+  r.setAttribute("data-float", v.float ? "on" : "off");
+  r.style.setProperty("--fs", v.font + "px");
+  r.style.setProperty("--zoom", v.zoom || 1);
+  for (const [k, css] of [["sideW", "--side-w"], ["panelW", "--panel-w"], ["fx", "--fx"], ["fy", "--fy"], ["fw", "--fw"], ["fh", "--fh"]])
+    if (v[k]) r.style.setProperty(css, v[k] + "px");
+  $("theme").textContent = "◆ " + G.THEMES[v.theme][0];
+  for (const [id, k] of [["p-density", "density"], ["p-font", "font"]]) if ($(id)) $(id).value = v[k];
+  if ($("p-zoom")) { $("p-zoom").value = Math.round((v.zoom || 1) * 100); $("p-zoom-v").textContent = Math.round((v.zoom || 1) * 100) + "%"; }
+  if ($("p-themes")) for (const b of $("p-themes").children) b.classList.toggle("on", b.dataset.theme === v.theme);
+  if ($("f-toggle")) $("f-toggle").textContent = v.filters === false ? "Показать фильтры" : "Скрыть фильтры";
   for (const b of $("viewmode").children) b.classList.toggle("on", b.dataset.view === G.view.mode);
 };
 let saveTimer;
@@ -184,7 +201,14 @@ G.saveView = function () {
   saveTimer = setTimeout(() => G.api("/api/prefs", {key: "ui.view", value: G.view}).catch(() => {}), 600);
 };
 G.normCols(); G.applyView();
-$("theme").onclick = () => { const t = ["auto", "light", "dark"]; G.view.theme = t[(t.indexOf(G.view.theme) + 1) % 3]; G.applyView(); G.saveView(); };
+$("theme").onclick = () => { const t = Object.keys(G.THEMES); G.view.theme = t[(t.indexOf(G.view.theme) + 1) % t.length]; G.applyView(); G.saveView(); };
+if ($("p-themes")) {
+  $("p-themes").replaceChildren(...Object.entries(G.THEMES).map(([k, [name, sub, sw]]) =>
+    G.h("button", {class: "theme-card", type: "button", "data-theme": k, onclick: () => { G.view.theme = k; G.applyView(); G.saveView(); }},
+      G.h("div", {class: "sw"}, sw.map(c => G.h("i", {style: "background:" + c}))), G.h("b", {text: name}), G.h("span", {text: sub}))));
+  $("p-zoom").oninput = () => { G.view.zoom = Number($("p-zoom").value) / 100; G.applyView(); G.saveView(); };
+  G.applyView();
+}
 
 // ---------- корзина сравнения ----------
 G.cmp = [];

@@ -241,10 +241,15 @@ const CELL = {
     title: it.gone ? "Снято с публикации" : ""}),
   life: it => h("span", {class: "num small", text: it.lifetime_days != null ? G.days(it.lifetime_days) : "—", title: "Сколько прожило объявление до снятия"}),
   quick: it => h("span", {class: "num small", text: it.score && it.score.quick_price ? G.fmt(it.score.quick_price) : "—", title: it.score ? (it.score.why || []).join("\n") : ""}),
+  roi: it => h("span", {class: "num " + (it.est_profit > 0 ? "p-mild" : "small"), text: it.est_profit > 0 ? G.pct(it.est_profit_pct) : "—",
+    title: "Чистая прибыль в процентах к цене покупки после торга"}),
+  perday: it => { const d = it.score && it.score.days_to_sell || 14;
+    return h("span", {class: "num " + (it.est_profit > 0 ? "p-mild" : "small"), text: it.est_profit > 0 ? G.fmt(it.est_profit / Math.max(d, 0.5)) : "—",
+      title: "Прибыль, делённая на ожидаемый срок продажи (" + Math.round(d) + " дн.)"}); },
   parts: it => { const p = it.parts; if (!p || !p.value) return h("span", {class: "small", text: "—", title: p ? p.verdict : "Не системный блок"});
     return h("span", {class: "num " + (p.diff >= 0 ? "p-mild" : "small"), title: p.verdict, text: G.fmt(p.value) + " (" + (p.diff >= 0 ? "+" : "−") + Math.abs(Math.round(p.diff)).toLocaleString("ru-RU") + ")"}); },
 };
-const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life", "quick", "parts"]);
+const RIGHT = new Set(["price", "median", "disc", "profit", "listed", "drop", "rating", "life", "quick", "parts", "roi", "perday"]);
 function cols() {
   const def = new Map(G.DEFAULT_COLS.map(c => [c[0], c]));
   const on = G.view.cols.filter(c => c.on).map(c => ({key: c.key, label: def.get(c.key)[1], w: def.get(c.key)[2], pin: c.pin}));

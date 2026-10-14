@@ -238,7 +238,7 @@ $("sc-save").onclick = async () => {
     full_interval_sec: $("sc-full").value, max_requests_per_hour: $("sc-limit").value})); G.say("sc-msg", "Сохранено — применится со следующего цикла", true); }
   catch (e) { G.say("sc-msg", e.message, false); }
 };
-for (const [id, key, conv] of [["p-density", "density", String], ["p-font", "font", Number], ["p-theme", "theme", String]])
+for (const [id, key, conv] of [["p-density", "density", String], ["p-font", "font", Number]])
   $(id).onchange = () => { G.view[key] = conv($(id).value); G.applyView(); G.saveView(); };
 $("a-autostart").onchange = () => appAction($("a-autostart").checked ? "autostart_on" : "autostart_off", "a-msg");
 $("a-update").onclick = () => { G.say("a-msg", "Проверяю…", true); appAction("check_updates", "a-msg"); };

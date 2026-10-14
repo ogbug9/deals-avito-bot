@@ -51,8 +51,7 @@ def test_adopt_moves_old_project_data_once(tmp_path):
     (old / "words" / "stop.txt").write_text("моё слово\n", encoding="utf-8")
     (old / "backups").mkdir()
     (old / "backups" / "a.db").write_text("x", encoding="utf-8")
-    # в новой папке — пустая база от первого запуска exe и его настройки
-    db.connect(str(new / "gpuflip.db")).close()
+    # в новой папке базы нет (существующую, даже пустую, переезд не трогает), но есть настройки первого запуска
     (new / ".env").write_text("# пример\n", encoding="utf-8")
     (new / "backups").mkdir()
     (new / "backups" / "b.db").write_text("y", encoding="utf-8")
@@ -65,7 +64,7 @@ def test_adopt_moves_old_project_data_once(tmp_path):
     assert sorted(p.name for p in (new / "backups").iterdir()) == ["a.db", "b.db"]
     assert not (old / "gpuflip.db").exists()
     kept = [p.name for p in new.iterdir() if "до-переезда" in p.name]
-    assert any(n.startswith("gpuflip.db") for n in kept) and any(n.startswith(".env") for n in kept)   # ничего не удалено
+    assert any(n.startswith(".env") for n in kept)   # ничего не удалено
     assert paths.adopt(old, new) == []                             # второй раз переносить нечего
 
 

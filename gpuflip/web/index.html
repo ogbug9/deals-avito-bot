@@ -19,7 +19,7 @@
     <button data-tab="status" type="button">Статус</button>
     <button data-tab="settings" type="button">Настройки</button>
   </nav>
-  <button class="ghost" id="theme" type="button" title="Тема оформления: авто, светлая, тёмная">Тема: авто</button>
+  <button class="ghost" id="theme" type="button" title="Стиль оформления: щелчок — следующий из пяти (выбор с образцами — в «Настройках»)">◆ Аметист и золото</button>
   <button class="ghost" id="help-btn" type="button" title="Горячие клавиши (?)">?</button>
 </div></header>
 
@@ -91,9 +91,11 @@
     <select id="f-age" class="gap" aria-label="Свежесть"><option value="">За всё время</option><option value="1">За сутки</option><option value="3">За 3 дня</option><option value="7">За неделю</option></select>
     <select id="f-hours" hidden><option value=""></option><option value="1">1</option></select>
   </aside>
+  <div class="gutter" id="side-grip" title="Потяните, чтобы изменить ширину фильтров; двойной щелчок — свернуть"></div>
   <div id="list-main">
     <div class="toolbar" id="presets" role="group" aria-label="Быстрые фильтры"></div>
     <div class="toolbar">
+      <button class="btn small" id="f-toggle" type="button" title="Свернуть или показать панель фильтров">Скрыть фильтры</button>
       <h2 id="count" aria-live="polite">…</h2>
       <button class="link" id="f-reset" type="button">Сбросить все фильтры</button>
       <span class="seg push" id="viewmode" role="group" aria-label="Вид списка">
@@ -103,7 +105,8 @@
         <button data-view="grid" type="button" title="Сетка с крупными фото">Сетка</button>
       </span>
       <select id="f-sort" aria-label="Сортировка">
-        <option value="date">Сначала новые</option><option value="profit">По прибыли</option>
+        <option value="date">Сначала новые</option><option value="profit">По прибыли, ₽</option>
+        <option value="roi">По доходности, % к вложенному</option><option value="perday">По прибыли в день</option>
         <option value="pct">По скидке к рынку, %</option><option value="price_asc">Дешевле</option>
         <option value="price_desc">Дороже</option><option value="drop">По снижению цены</option>
         <option value="rating">По рейтингу продавца</option>
@@ -218,8 +221,14 @@
     <div class="form-grid">
       <div><label for="p-density">Плотность</label><select id="p-density"><option value="roomy">Просторно</option><option value="normal">Нормально</option><option value="compact">Компактно</option></select></div>
       <div><label for="p-font">Размер шрифта</label><select id="p-font"><option value="13">Мелкий</option><option value="14">Обычный</option><option value="15">Крупнее</option><option value="16">Крупный</option></select></div>
-      <div><label for="p-theme">Тема</label><select id="p-theme"><option value="auto">Как в системе</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></div>
+      <div><label for="p-zoom">Масштаб интерфейса (Ctrl + / Ctrl − / Ctrl 0)</label>
+        <div class="scale-row"><input type="range" id="p-zoom" min="80" max="150" step="5"><b id="p-zoom-v" class="num">100%</b></div></div>
     </div>
+    <h3>Стиль оформления</h3>
+    <div class="themes" id="p-themes"></div>
+    <div class="small">Ширина фильтров и панели лота меняется перетаскиванием границы; панель лота можно отстегнуть кнопкой
+      «Отстегнуть» — она станет окном, которое двигается за верхнюю полосу и растягивается за правый нижний угол.
+      Двойной щелчок по границе фильтров сворачивает их.</div>
   </div>
   <div class="panel">
     <h2>Telegram</h2>
@@ -315,5 +324,7 @@
 <script src="/static/panel.js"></script>
 <script src="/static/compare.js"></script>
 <script src="/static/tabs.js"></script>
+<script src="/static/layout.js"></script>
+<script>$("f-toggle").onclick = () => G.toggleFilters();</script>
 </body>
 </html>

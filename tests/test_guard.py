@@ -39,3 +39,30 @@ def test_damaged_base_is_detected(tmp_path):
     raw[100:4096] = b"\xff" * (4096 - 100)                               # испорчена первая страница со схемой
     bad.write_bytes(bytes(raw))
     assert guard.check_db(bad) != ""
+
+
+def test_rolling_backup_keeps_last_copies_and_skips_damaged_base(tmp_path):
+    path = tmp_path / "gpuflip.db"
+    c = db.connect(str(path))
+    c.close()
+    made = [db.rolling_backup(str(path), "hour", keep=3, every=0, now=1_800_000_000 + i * 3600) for i in range(5)]
+    assert all(made) and len(list((tmp_path / "backups").glob("hour-gpuflip-*.db"))) == 3
+    assert db.rolling_backup(str(path), "hour", keep=3, every=3600) is None                    # с последней копии не прошёл час
+    raw = bytearray(path.read_bytes())
+    raw[100:4096] = b"\xff" * (4096 - 100)
+    path.write_bytes(bytes(raw))
+    assert db.rolling_backup(str(path), "hour", keep=3, every=0, now=1_800_100_000) is None                      # испорченную не копируем
+    assert len(list((tmp_path / "backups").glob("hour-gpuflip-*.db"))) == 3
+
+
+def test_adopt_never_touches_an_existing_base(tmp_path):
+    from gpuflip.paths import adopt
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    c = db.connect(str(old / "gpuflip.db"))
+    c.execute("INSERT INTO listings(id, title, price, url, first_seen, last_seen, source) VALUES('1','x',1,'u',0,0,'s')")
+    c.commit()
+    c.close()
+    db.connect(str(new / "gpuflip.db")).close()                         # пустая, но существующая база
+    assert adopt(old, new) == [] and (old / "gpuflip.db").exists()

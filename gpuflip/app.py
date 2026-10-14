@@ -129,6 +129,10 @@ class Worker(threading.Thread):
     def run(self) -> None:
         from .cli import run_due
         while not self._halt.is_set():
+            try:                              # пока приложение открыто — копия базы раз в час, 24 последние
+                db.rolling_backup(str(home() / "gpuflip.db"), "hour", keep=24, every=3600)
+            except Exception as e:
+                _log(f"копия базы не сделана: {type(e).__name__}: {e}")
             if self.paused or self.sched.due() is None:
                 self._wake.wait(timeout=5)
                 self._wake.clear()

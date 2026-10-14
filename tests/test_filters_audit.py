@@ -149,6 +149,9 @@ SORTS = [
     ("price_asc", lambda r: r["price"], False),
     ("price_desc", lambda r: r["price"], True),
     ("profit", lambda r: r["est_profit"], True),
+    ("roi", lambda r: r["est_profit_pct"] if r["est_profit"] and r["est_profit"] > 0 else None, True),
+    ("perday", lambda r: r["est_profit"] / max((r["score"] or {}).get("days_to_sell") or 14, 0.5)
+     if r["est_profit"] and r["est_profit"] > 0 else None, True),
     ("pct", disc, True),
     ("rating", lambda r: r["rating"], True),
     ("drop", lambda r: (r["first_price"] or 0) - (r["price"] or 0), True),

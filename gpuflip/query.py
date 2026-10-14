@@ -13,6 +13,11 @@ _NO_MARKET = f"({_SC.format('market_n')} IS NULL OR {_SC.format('market_n')} < 6
 SORTS = {
     "date": ("COALESCE(posted_at, first_seen)", True, "", ""),
     "profit": ("est_profit", True, "est_profit IS NULL", ""),
+    # доходность: сколько процентов приносит каждый вложенный рубль — для небольшого капитала важнее абсолютной суммы
+    "roi": ("est_profit_pct", True, "est_profit_pct IS NULL OR est_profit IS NULL OR est_profit<=0", ""),
+    # прибыль в день: деньги заморожены до продажи, быстрый оборот лучше крупной, но долгой сделки
+    "perday": (f"est_profit / MAX(COALESCE({_SC.format('days_to_sell')}, 14), 0.5)", True,
+               "est_profit IS NULL OR est_profit<=0", ""),
     "pct": (_SC.format("discount_vs_market"), True, _NO_MARKET, ""),
     "price_asc": ("price", False, "", ""),
     "price_desc": ("price", True, "", ""),

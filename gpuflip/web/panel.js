@@ -148,8 +148,8 @@ function render(d) {
 
   const sim = d.similar, eq = d.equivalents;
   p.replaceChildren(...[      // пустые блоки отбрасываем: replaceChildren(null) напечатал бы слово «null»
-    h("button", {class: "btn small close", type: "button", text: "Закрыть ✕", title: "Закрыть панель (Esc)", onclick: G.panelClose}),
-    h("h2", {text: d.title, style: "padding-right:110px;overflow-wrap:anywhere"}),
+    G.panelBar(d.item_key || d.category_title),
+    h("h2", {text: d.title, style: "overflow-wrap:anywhere"}),
     h("div", {class: "meta", text: [d.city, d.date_text, d.category_title, d.item_key].filter(Boolean).join(" · ")}),
     h("div", {style: "display:flex;align-items:baseline;gap:12px;margin:8px 0"},
       h("span", {class: "price num", text: G.fmt(d.price)}),
