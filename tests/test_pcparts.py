@@ -125,6 +125,10 @@ def test_breakdown_is_stored_filtered_and_sorted(tmp_path):
     row = next(i for i in app.listings(q(cat="pc"))["items"] if i["id"] == "900")
     assert row["parts"]["priced"] == 3 and row["parts_value"] == v900 and "parts_json" not in row
     assert app.listing("900")["parts"]["items"][0]["label"] == "Видеокарта"
+    csv_text = app.export_csv(q(cat="pc", sort="parts"))
+    head, first = csv_text.splitlines()[:2]
+    cols = head.split(";")
+    assert "ПК: детали, ₽" in cols and first.split(";")[cols.index("ПК: оценено деталей")] == "3 из 6"
 
 
 def test_rescore_covers_gone_listings_too(conn):

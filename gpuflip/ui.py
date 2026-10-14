@@ -576,7 +576,7 @@ class App:
         buf = io.StringIO()
         w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
         w.writerow(["id", "Название", "Цена", "Категория", "Позиция", "Медиана", "n", "Скидка к рынку, %", "Быстрая продажа",
-                    "Спокойная продажа", "Мусор", "Расчётная прибыль",
+                    "Спокойная продажа", "Мусор", "Расчётная прибыль", "ПК: детали, ₽", "ПК: детали минус цена", "ПК: оценено деталей",
                     "Режимы", "Доверие", "Причина", "Город", "Доставка", "Состояние", "Дата", "Дней в базе", "Снижение цены",
                     "Продавец", "Рейтинг", "Мой статус", "Заметка", "Объявление", "Впервые увидели", "Последний раз видели",
                     "Опубликовано (оценка)", "Ушло", "Прожило дней", "Ссылка"])
@@ -590,7 +590,11 @@ class App:
                         f"{sc['discount_vs_market'] * 100:.0f}" if sc.get("discount_vs_market") is not None and sc.get("market_n") else "",
                         f"{sc['quick_price']:.0f}" if sc.get("quick_price") else "",
                         f"{sc['comfort_price']:.0f}" if sc.get("comfort_price") else "", d["junk_title"],
-                        f"{d['est_profit']:.0f}" if d["est_profit"] else "", ", ".join(m["title"] for m in d["modes"]),
+                        f"{d['est_profit']:.0f}" if d["est_profit"] else "",
+                        f"{d['parts_value']:.0f}" if d["parts_value"] else "",
+                        f"{d['parts_value'] - d['price']:.0f}" if d["parts_value"] and d["price"] else "",
+                        f"{d['parts']['priced']} из {d['parts']['expected']}" if d["parts"] else "",
+                        ", ".join(m["title"] for m in d["modes"]),
                         modes.CONFIDENCE_RU.get(d["confidence"] or "", ""), d["reason"] or "", d["city"] or "",
                         "да" if d["delivery"] else "нет", d["avito_condition"] or "", d["date_text"] or "",
                         f"{d['days_listed']:.0f}" if d["days_listed"] is not None else "",
