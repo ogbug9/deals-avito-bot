@@ -144,3 +144,14 @@ def test_rescore_covers_gone_listings_too(conn):
     card = conn.execute("SELECT status, item_key, score_json, mode_tags FROM listings WHERE id='950'").fetchone()
     assert card["status"] == "inactive" and card["item_key"] == "RTX 3060 12GB" and json.loads(card["score_json"])["quick_price"]
     assert db.market_stats(conn, "RTX 3060 12GB", None, NOW + 200).n == 12              # ушедший лот рынок не двигает
+
+
+def test_cpu_without_own_market_takes_a_near_twin(conn):
+    assert pcparts.cpu_siblings("CPU i5-12400") == ["CPU i5-12400F", "CPU i5-12400K", "CPU i5-12400KF"]
+    assert "CPU Ryzen 5 5600" in pcparts.cpu_siblings("CPU Ryzen 5 5600X")
+    assert pcparts.cpu_siblings("CPU Ryzen 7 7800X3D") == [] and pcparts.cpu_siblings("CPU Ryzen 5 5600G") == []
+    out = pcparts.breakdown(conn, Config(), "Игровой пк", "Процессор Intel Core i5-12400, видеокарта RTX 3060 12GB", 30000, NOW + 60)
+    cpu = next(x for x in out["items"] if x["kind"] == "cpu")
+    twin = round(round(9100 * 0.92) * 0.95)
+    assert cpu["key"] == "CPU i5-12400" and cpu["status"] == "approx" and cpu["value"] == pytest.approx(twin, abs=2)
+    assert "i5-12400F" in cpu["note"] and out["approx"]

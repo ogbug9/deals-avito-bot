@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import statistics
 
 from . import db, parts
@@ -46,6 +47,21 @@ def _unit_price(conn, pattern: str, now: float) -> tuple[float, int]:
     return (statistics.median(rows), len(rows)) if len(rows) >= FAMILY_MIN else (0.0, len(rows))
 
 
+SIBLING_DISCOUNT = 0.95   # цена соседней модели процессора берётся с запасом: у F нет графики, K дороже
+
+
+def cpu_siblings(key: str) -> list[str]:
+    """Почти такие же процессоры: i5-13400F ↔ i5-13400 / 13400K / 13400KF, Ryzen 5 5600 ↔ 5600X / 5600XT.
+    X3D и G (со встроенной графикой) — другие по цене, их не смешиваем."""
+    m = re.fullmatch(r"(CPU i[3579]-\d{4,5})(F|K|KF|KS)?", key)
+    if m:
+        return [m.group(1) + s for s in ("", "F", "K", "KF") if m.group(1) + s != key]
+    m = re.fullmatch(r"(CPU Ryzen [3579] \d{4})(X|XT|F)?", key)
+    if m:
+        return [m.group(1) + s for s in ("", "X", "XT", "F") if m.group(1) + s != key]
+    return []
+
+
 def _price_part(conn, cfg: Config, part: parts.Part, now: float, caps: dict, cache: dict) -> dict:
     item = {"kind": part.kind, "label": KIND_RU.get(part.kind, part.kind), "key": part.key, "value": None,
             "median": None, "n": 0, "status": "nomarket", "note": ""}
@@ -60,6 +76,19 @@ def _price_part(conn, cfg: Config, part: parts.Part, now: float, caps: dict, cac
                     status="ok" if ms.n >= cfg.alert_market_n else "rough",
                     note=f"{ms.n} объявлений, медиана {_rub(ms.median_ask)}, быстрая продажа — {pts.basis}{extra}")
         return item
+    if part.kind == "cpu":
+        best = None
+        for sib in cpu_siblings(part.key):
+            if sib not in cache:
+                cache[sib] = db.market_stats(conn, sib, None, now)
+            if cache[sib].n >= cfg.min_market_n and (best is None or cache[sib].n > best.n):
+                best = cache[sib]
+        if best:
+            pts = price_points(best, cfg, caps.get(best.key))
+            item.update(value=round(pts.quick * SIBLING_DISCOUNT), median=round(best.median_ask), n=best.n, status="approx",
+                        note=f"своих объявлений мало ({ms.n}); взята цена почти такого же {best.key.replace('CPU ', '')} "
+                             f"({best.n} объявлений) минус 5%")
+            return item
     pattern = _family(part)
     if pattern and part.qty:
         fam = ("family", pattern)
